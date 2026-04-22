@@ -75,3 +75,31 @@ class SafetyAudit(BaseModel):
         default_factory=list,
         description="Specific violations, e.g. '\"Pesto Quinoa\" contains pine nuts (nut-allergy).'",
     )
+
+
+class SaboteurReport(BaseModel):
+    """Red-team adversary's finding on a plan the Verifier already cleared.
+
+    The Saboteur runs after the Verifier and tries to invent a credible
+    attack the deterministic audit would miss — cross-contamination risk,
+    restrictions outside the audit tool's known categories, hidden animal
+    products, etc.
+    """
+
+    status: Literal["no_loophole_found", "loophole_found"]
+    attack: str = Field(
+        default="",
+        description="One-sentence description of how a guest could still be harmed.",
+    )
+    evidence: str = Field(
+        default="",
+        description="Which ingredient(s) and which restriction(s) the attack targets.",
+    )
+    proposed_fix: str = Field(
+        default="",
+        description="Concrete delta for the Architect to apply on the next iteration.",
+    )
+    notes: str = Field(
+        default="",
+        description="Free-form notes on what the Saboteur audited (only on no_loophole_found).",
+    )

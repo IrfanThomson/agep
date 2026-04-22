@@ -56,6 +56,12 @@ SCENARIOS: dict[str, EventConstraints] = {
         required_ingredients=[],
         dietary_restrictions=[],
     ),
+    "hidden_gluten": EventConstraints(
+        guests=6,
+        budget_usd=150.0,
+        required_ingredients=["rolled oats"],
+        dietary_restrictions=["gluten-free"],
+    ),
 }
 
 
@@ -116,6 +122,7 @@ async def run_scenario(constraints: EventConstraints) -> dict[str, Any]:
         "grounded_plan": {},
         "critique": {},
         "verification": {},
+        "saboteur_report": {},
         "plan_approved": False,
         "constraint_conflict": False,
         "conflict_reason": "",
@@ -188,8 +195,8 @@ def _log_event(event: Any, log_state: dict[str, Any]) -> None:
     if not content or not getattr(content, "parts", None):
         return
 
-    # A fresh architect turn after the verifier → new iteration.
-    if author == "architect" and log_state["last_author"] in (None, "verifier"):
+    # A fresh architect turn after the saboteur → new iteration.
+    if author == "architect" and log_state["last_author"] in (None, "saboteur"):
         log_state["iteration"] += 1
         print(f"\nIteration {log_state['iteration']}")
     log_state["last_author"] = author
@@ -241,6 +248,22 @@ def _summarize_agent_text(author: str, text: str) -> str | None:
         preview = _short(violations[0], 80)
         more = f" (+{len(violations) - 1} more)" if len(violations) > 1 else ""
         return f"{status} · {len(violations)} violation{'s' if len(violations) != 1 else ''}{more}"
+
+    if author == "saboteur" and isinstance(payload, dict) and "status" in payload:
+        status_raw = str(payload.get("status", "")).strip().lower()
+        if status_raw == "loophole_found":
+            attack = _short(str(payload.get("attack", "")), 90)
+            return f"LOOPHOLE · \"{attack}\""
+        notes = _short(str(payload.get("notes", "")), 90)
+        return f"CLEAR · \"{notes}\"" if notes else "CLEAR · no loophole found"
+
+    # Fallback for the saboteur when JSON parsing fails (e.g. invalid escapes
+    # in the notes field): look for the status strings directly in the text.
+    if author == "saboteur":
+        if "no_loophole_found" in clean:
+            return "CLEAR · no loophole found"
+        if "loophole_found" in clean:
+            return "LOOPHOLE · (see raw JSON below)"
 
     # Not a known agent shape; show a short preview.
     compact = " ".join(clean.split())

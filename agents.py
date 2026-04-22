@@ -1,12 +1,18 @@
-"""Agent definitions for AGEP.
+"""Agent definitions for AGEP v2.
 
-Four specialized :class:`LlmAgent`s plus the outer :class:`LoopAgent`:
+Five specialized :class:`LlmAgent`s plus the outer :class:`LoopAgent`:
 
 * Architect (temp 0.7) — strategic decomposition into a JSON menu plan
 * Executor  (temp 0.1) — tool-grounded pricing of the plan
 * Critic    (temp 0.0) — budget & macro validation; emits delta instructions
-* Verifier  (temp 0.0) — zero-trust ingredient audit; the only agent that
-                         terminates the loop via ``approve_plan``
+* Verifier  (temp 0.0) — deterministic ingredient audit against the
+                         restriction tool's known categories
+* Saboteur  (temp 0.7) — red-team adversary; finds loopholes the Verifier's
+                         tool cannot see (cross-contamination, out-of-tool
+                         restrictions, hidden animal products). Owns
+                         ``approve_plan`` — the only agent that can
+                         terminate the loop. Verifier and Saboteur must
+                         both clear before approval — "consensus safety".
 
 The loop runs at most 5 iterations. Inter-agent communication is via
 ``session.state`` — each agent declares an ``output_key`` and reads prior
@@ -47,6 +53,7 @@ Inputs (already in session state):
 - user_constraints: {{user_constraints}}
 - critique (from the Critic, may be empty on iteration 1): {{critique}}
 - verification (from the Verifier, may be empty on iteration 1): {{verification}}
+- saboteur_report (from the Red-Team Saboteur, may be empty on iteration 1): {{saboteur_report}}
 
 Your job: produce a JSON menu plan that satisfies the constraints. You have NO
 tools — just compose the plan from your culinary knowledge.
@@ -65,9 +72,14 @@ Rules:
 4. If critique.status == "rejected", apply EVERY delta_instruction.
 5. If verification.status == "rejected", swap out every listed violating
    ingredient for a safe alternative.
-6. Use ONLY ingredients from the pantry below — anything else will be flagged
+6. If saboteur_report.status == "loophole_found", address the attack —
+   usually by applying proposed_fix verbatim. If the fix requires a sourcing
+   caveat rather than an ingredient swap (e.g. "use certified gluten-free
+   oats"), state that caveat explicitly in the plan's ``notes`` field so the
+   Saboteur can see that the risk has been acknowledged on the next pass.
+7. Use ONLY ingredients from the pantry below — anything else will be flagged
    as unknown and rejected. Match names exactly (case-insensitive is fine).
-7. Use the unit shown in parentheses for each pantry ingredient. You may use
+8. Use the unit shown in parentheses for each pantry ingredient. You may use
    common unit aliases (lb/lbs/pound, oz, g, kg, tbsp, tsp, cup, ml, count,
    clove, bunch, can) — the pricing system converts between compatible units.
    Do NOT mix incompatible units (e.g. 'kg' for an ingredient priced per 'count').
@@ -141,37 +153,97 @@ Your job:
 Respond with ONLY a JSON object in this shape, no prose, no fences:
 {{"status": "approved|rejected", "reason": "...", "delta_instructions": [...]}}
 
-Do NOT call `approve_plan` — that is the Verifier's responsibility.
+Do NOT call `approve_plan` — that is the Saboteur's responsibility.
 """
 
 
 VERIFIER_PROMPT = """\
-You are the Verifier — Zero-Trust ingredient safety auditor. Hallucinations
-stop here.
+You are the Verifier — deterministic ingredient safety auditor for the
+categories the audit tool knows about (vegan, nut-allergy, gluten-free,
+dairy-free, soy-allergy, shellfish-allergy, egg-allergy, fish-allergy,
+vegetarian).
 
 Inputs:
 - grounded_plan: {grounded_plan}
-- critique: {critique}
 - user_constraints: {user_constraints}
 
 Your job (EXACTLY these steps):
 1. Call `audit_menu_plan` with plan_json set to grounded_plan's JSON and
    restrictions set to user_constraints.dietary_restrictions.
-2. Inspect the tool result:
-   - If result.status == "approved" AND critique.status == "approved": call
-     `approve_plan` — this terminates the loop.
-   - Otherwise: do NOT call approve_plan.
-3. Respond with ONLY a JSON SafetyAudit reflecting YOUR OWN audit:
+2. Respond with ONLY a JSON SafetyAudit reflecting the tool result:
    {{"status": "<mirror result.status from audit_menu_plan>",
      "violations": <mirror result.violations from audit_menu_plan>}}
 
-Your SafetyAudit describes your own ingredient audit. Do NOT fold in the
-Critic's budget complaints — those belong to the Critic. If your audit is
-clean, emit {{"status": "approved", "violations": []}} even if the Critic
-rejected the plan.
+You do NOT have the authority to approve the plan — that decision now
+belongs to the Saboteur, which runs after you. Your job is ONLY the
+deterministic audit. Emit the JSON SafetyAudit faithfully and stop.
+
+Do NOT fold in the Critic's budget complaints — those belong to the Critic.
+Do NOT speculate about hidden risks the tool doesn't know about — that is
+the Saboteur's job. Your output must mirror the tool result exactly.
 
 Never emit status=approved with a non-empty violations list — that defeats
 the entire purpose of this agent.
+"""
+
+
+SABOTEUR_PROMPT = """\
+You are the Saboteur — the Red-Team adversary. You have ONE job: find a
+realistic loophole the deterministic Verifier missed, OR endorse the plan
+if no genuine attack exists.
+
+Inputs:
+- grounded_plan: {grounded_plan}
+- verification (Verifier's audit result): {verification}
+- critique (Critic's budget verdict): {critique}
+- user_constraints: {user_constraints}
+
+Threat model — gaps the Verifier's tool CANNOT see:
+1. Cross-contamination in commercial processing: rolled oats are routinely
+   processed on wheat lines, so plain oats violate gluten-free unless
+   explicitly certified. Soy sauce usually contains wheat unless labeled
+   tamari or gluten-free. Malt vinegar comes from barley. Deli meats on
+   shared slicers pick up dairy and allergens.
+2. Hidden allergens outside the Verifier's known categories: sesame (in
+   tahini and sesame oil); mustard (in many dressings); sulfites (dried
+   fruit); alcohol (vanilla extract, wine reductions).
+3. Animal-derived ingredients that pass naive vegan checks: honey; gelatin;
+   isinglass fining in wine; whey in packaged pastries; anchovies in
+   Worcestershire and Caesar dressing; bone char-filtered sugar.
+4. Implicit mitigations already noted by the Architect — if the plan's
+   ``notes`` field explicitly addresses a risk (e.g. "use certified
+   gluten-free oats"), ACCEPT that mitigation and do not re-flag it.
+
+Process:
+1. If critique.status == "rejected", the plan is already failing on budget.
+   Emit:
+     {{"status": "loophole_found",
+       "attack": "plan exceeds budget; Critic rejected",
+       "evidence": "critique.status=rejected",
+       "proposed_fix": "apply Critic's delta_instructions"}}
+   and stop — do NOT call approve_plan.
+2. Otherwise scan every ingredient against the threat model above. If you
+   find a CREDIBLE, unaddressed attack, emit:
+     {{"status": "loophole_found",
+       "attack": "<one-sentence attack description>",
+       "evidence": "<which ingredient and which restriction>",
+       "proposed_fix": "<concrete delta the Architect should apply>"}}
+   and stop — do NOT call approve_plan.
+3. If (Critic approved AND Verifier approved AND you find no genuine
+   attack): call the function `approve_plan`. This terminates the loop.
+   Then on your final turn emit:
+     {{"status": "no_loophole_found",
+       "notes": "<one-sentence summary of what you audited>"}}
+
+Respond with ONLY ONE JSON object per turn, no prose, no fences. Do NOT
+use backslash escapes inside string values (spell out "dollars" and "less
+than" instead of using ``\\$`` or ``<``) — invalid JSON escapes break
+downstream parsing.
+
+Be adversarial but not pedantic. "The olive oil might be packaged in a
+facility that also processes sesame" is NOT a loophole — that level of
+risk exists for every food on earth. Loopholes are specific, known,
+common-enough-to-matter failure modes.
 """
 
 
@@ -180,8 +252,8 @@ the entire purpose of this agent.
 # ---------------------------------------------------------------------------
 
 
-def build_agents() -> tuple[LlmAgent, LlmAgent, LlmAgent, LlmAgent]:
-    """Construct the four agents.
+def build_agents() -> tuple[LlmAgent, LlmAgent, LlmAgent, LlmAgent, LlmAgent]:
+    """Construct the five agents.
 
     Packaged in a function so the model backend (which reads env vars) is
     resolved at call time, not at import time — this lets tests and CLIs
@@ -220,24 +292,34 @@ def build_agents() -> tuple[LlmAgent, LlmAgent, LlmAgent, LlmAgent]:
         name="verifier",
         model=get_model(0.0),
         generate_content_config=_cfg(0.0),
-        description="Zero-trust ingredient safety audit; the only agent that can approve.",
+        description="Deterministic ingredient safety audit against known restriction categories.",
         instruction=VERIFIER_PROMPT,
-        tools=[audit_menu_plan, approve_plan],
+        tools=[audit_menu_plan],
         output_key="verification",
     )
 
-    return architect, executor, critic, verifier
+    saboteur = LlmAgent(
+        name="saboteur",
+        model=get_model(0.7),
+        generate_content_config=_cfg(0.7),
+        description="Red-team adversary; finds loopholes the Verifier's tool cannot see. Owns approve_plan.",
+        instruction=SABOTEUR_PROMPT,
+        tools=[approve_plan],
+        output_key="saboteur_report",
+    )
+
+    return architect, executor, critic, verifier, saboteur
 
 
 def build_loop() -> LoopAgent:
-    """Construct the outer Plan-Act-Reflect loop (max 5 iterations)."""
-    architect, executor, critic, verifier = build_agents()
+    """Construct the outer Plan-Act-Reflect-RedTeam loop (max 5 iterations)."""
+    architect, executor, critic, verifier, saboteur = build_agents()
     return LoopAgent(
         name="AGEP_Loop",
         description=(
-            "Plan-Act-Reflect loop with nested Correction and "
-            "Hallucination-Prevention sub-loops."
+            "Plan-Act-Reflect-RedTeam loop with nested Correction, "
+            "Hallucination-Prevention, and Adversarial-Consensus sub-loops."
         ),
-        sub_agents=[architect, executor, critic, verifier],
+        sub_agents=[architect, executor, critic, verifier, saboteur],
         max_iterations=MAX_ITERATIONS,
     )
