@@ -135,13 +135,14 @@ async def run_scenario(constraints: EventConstraints) -> dict[str, Any]:
         ],
     )
 
-    iteration = 0
+    log_state: dict[str, Any] = {"iteration": 0, "last_author": None}
     async for event in runner.run_async(
         user_id=USER_ID, session_id=SESSION_ID, new_message=new_message
     ):
-        iteration = _log_event(event, iteration)
+        _log_event(event, log_state)
 
     final_state = await _final_state(runner)
+    final_state["_iterations"] = log_state["iteration"]
 
     if final_state.get("constraint_conflict"):
         raise ConstraintConflictError(
@@ -174,31 +175,167 @@ async def _final_state(runner: InMemoryRunner) -> dict[str, Any]:
     return dict(session.state) if session else {}
 
 
-def _log_event(event: Any, prior_iter: int) -> int:
+def _log_event(event: Any, log_state: dict[str, Any]) -> None:
+    """Render one ADK event as a human-readable line.
+
+    The underlying event stream is dense (truncated JSON blobs with every
+    tool call and response). This formatter turns it into a scannable trace:
+    per-iteration headers, one line per agent action, key fields pulled out
+    of tool payloads.
+    """
     author = getattr(event, "author", None) or "?"
     content = getattr(event, "content", None)
-    if content and getattr(content, "parts", None):
-        for part in content.parts:
-            text = getattr(part, "text", None)
-            if text and text.strip():
-                preview = text.strip().replace("\n", " ")
-                if len(preview) > 160:
-                    preview = preview[:157] + "..."
-                print(f"  [{author}] {preview}")
-                continue
-            fc = getattr(part, "function_call", None)
-            if fc and fc.name:
-                print(
-                    f"  [{author}] → tool {fc.name}({json.dumps(fc.args or {})[:120]})"
-                )
-                continue
-            fr = getattr(part, "function_response", None)
-            if fr and fr.name:
-                preview = json.dumps(fr.response or {})
-                if len(preview) > 120:
-                    preview = preview[:117] + "..."
-                print(f"  [{author}] ← {fr.name} = {preview}")
-    return prior_iter
+    if not content or not getattr(content, "parts", None):
+        return
+
+    # A fresh architect turn after the verifier → new iteration.
+    if author == "architect" and log_state["last_author"] in (None, "verifier"):
+        log_state["iteration"] += 1
+        print(f"\nIteration {log_state['iteration']}")
+    log_state["last_author"] = author
+
+    for part in content.parts:
+        if getattr(part, "text", None) and part.text.strip():
+            line = _summarize_agent_text(author, part.text)
+            if line:
+                print(_fmt(author, "→", line))
+        fc = getattr(part, "function_call", None)
+        if fc and fc.name:
+            print(_fmt(author, "→", _summarize_tool_call(fc.name, fc.args or {})))
+        fr = getattr(part, "function_response", None)
+        if fr and fr.name:
+            print(_fmt(author, "←", _summarize_tool_response(fr.name, fr.response or {})))
+
+
+def _fmt(author: str, arrow: str, body: str) -> str:
+    return f"  {author:<10s} {arrow} {body}"
+
+
+def _summarize_agent_text(author: str, text: str) -> str | None:
+    """Turn an agent's final text response into a one-line summary."""
+    clean = text.strip()
+    payload = _parse_agent_json(clean)
+
+    if author == "architect" and isinstance(payload, dict) and "recipes" in payload:
+        recipes = payload.get("recipes") or []
+        return f"drafted {len(recipes)} recipe{'s' if len(recipes) != 1 else ''}"
+
+    if author == "executor" and isinstance(payload, dict) and "recipes" in payload:
+        total = payload.get("total_cost_usd")
+        if isinstance(total, (int, float)):
+            return f"returned priced plan (${float(total):.2f})"
+        return "returned priced plan"
+
+    if author == "critic" and isinstance(payload, dict) and "status" in payload:
+        status = str(payload.get("status", "")).upper()
+        reason = _short(str(payload.get("reason", "")), 90)
+        deltas = payload.get("delta_instructions") or []
+        tail = f" · {len(deltas)} delta-instruction{'s' if len(deltas) != 1 else ''}" if deltas else ""
+        return f"{status} · \"{reason}\"{tail}"
+
+    if author == "verifier" and isinstance(payload, dict) and "status" in payload:
+        status = str(payload.get("status", "")).upper()
+        violations = payload.get("violations") or []
+        if not violations:
+            return f"{status} · 0 violations"
+        preview = _short(violations[0], 80)
+        more = f" (+{len(violations) - 1} more)" if len(violations) > 1 else ""
+        return f"{status} · {len(violations)} violation{'s' if len(violations) != 1 else ''}{more}"
+
+    # Not a known agent shape; show a short preview.
+    compact = " ".join(clean.split())
+    return _short(compact, 120)
+
+
+def _summarize_tool_call(name: str, args: dict[str, Any]) -> str:
+    if name == "price_menu_plan":
+        plan = _parse_agent_json(args.get("plan_json", "") or "") or {}
+        recipes = plan.get("recipes") or [] if isinstance(plan, dict) else []
+        ingredient_count = sum(len(r.get("ingredients") or []) for r in recipes)
+        return f"price_menu_plan({len(recipes)} recipes, {ingredient_count} ingredients)"
+
+    if name == "audit_menu_plan":
+        plan = _parse_agent_json(args.get("plan_json", "") or "") or {}
+        recipes = plan.get("recipes") or [] if isinstance(plan, dict) else []
+        ingredient_count = sum(len(r.get("ingredients") or []) for r in recipes)
+        restrictions = args.get("restrictions") or []
+        rlist = ", ".join(restrictions) if isinstance(restrictions, list) else str(restrictions)
+        return f"audit_menu_plan({ingredient_count} ingredients, [{rlist}])"
+
+    if name == "approve_plan":
+        return "approve_plan — loop exits"
+
+    if name == "flag_constraint_conflict":
+        reason = _short(str(args.get("reason", "")), 100)
+        return f"flag_constraint_conflict · \"{reason}\""
+
+    return f"{name}({_short(json.dumps(args), 100)})"
+
+
+def _summarize_tool_response(name: str, response: dict[str, Any]) -> str:
+    if name == "price_menu_plan":
+        plan = response.get("grounded_plan") or {}
+        total = plan.get("total_cost_usd") if isinstance(plan, dict) else None
+        unknown = response.get("unknown_ingredients") or []
+        total_str = f"${float(total):.2f}" if isinstance(total, (int, float)) else "?"
+        return f"{total_str} total · {len(unknown)} unknown ingredient{'s' if len(unknown) != 1 else ''}"
+
+    if name == "audit_menu_plan":
+        status = str(response.get("status", "")).upper()
+        violations = response.get("violations") or []
+        audited = response.get("audited_count", "?")
+        if not violations:
+            return f"{status} · {audited} ingredients checked · 0 violations"
+        return f"{status} · {len(violations)} violation{'s' if len(violations) != 1 else ''} of {audited} checked"
+
+    if name == "approve_plan":
+        return "approved=True"
+
+    if name == "flag_constraint_conflict":
+        return "aborted=True"
+
+    return _short(json.dumps(response), 120)
+
+
+def _parse_agent_json(text: str) -> Any:
+    """Best-effort JSON extraction — strip markdown fences, grab first object."""
+    if not text:
+        return None
+    stripped = text.strip()
+    # Strip ``` fences.
+    if stripped.startswith("```"):
+        stripped = stripped.split("\n", 1)[-1]
+        if stripped.endswith("```"):
+            stripped = stripped[: -3]
+        stripped = stripped.strip()
+        if stripped.startswith("json"):
+            stripped = stripped[4:].strip()
+    try:
+        return json.loads(stripped)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    # Fallback: first balanced {...}.
+    depth = 0
+    start = stripped.find("{")
+    if start == -1:
+        return None
+    for i in range(start, len(stripped)):
+        ch = stripped[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(stripped[start : i + 1])
+                except json.JSONDecodeError:
+                    return None
+    return None
+
+
+def _short(s: str, n: int) -> str:
+    s = " ".join(s.split())
+    return s if len(s) <= n else s[: n - 1] + "…"
 
 
 # ---------------------------------------------------------------------------
@@ -206,20 +343,41 @@ def _log_event(event: Any, prior_iter: int) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _print_receipt(final_state: dict[str, Any]) -> None:
+_RULE = "━" * 60
+_THIN = "─" * 60
+
+
+def _print_header(scenario: str, backend: str, constraints: "EventConstraints") -> None:
+    req = ", ".join(constraints.required_ingredients) or "—"
+    res = ", ".join(constraints.dietary_restrictions) or "—"
+    print(_RULE)
+    print(f" AGEP · scenario '{scenario}' · backend {backend}")
+    print(
+        f" {constraints.guests} guests · ${constraints.budget_usd:.0f} budget"
+        f" · required: {req} · restrictions: {res}"
+    )
+    print(_RULE)
+
+
+def _print_receipt(final_state: dict[str, Any], iterations: int) -> None:
     raw_plan = final_state.get("grounded_plan") or final_state.get("current_plan")
-    print("\n" + "=" * 60)
-    print("AGEP RESULT — plan approved")
-    print("=" * 60)
+    print()
+    print(_THIN)
     plan = _parse_menu_plan(raw_plan)
     if plan is None:
-        print("(Agents approved, but the final plan did not parse as MenuPlan.)")
+        print(" Plan approved but the final payload did not parse as MenuPlan.")
+        print(_THIN)
         print(f"Raw state: {raw_plan!r}")
         return
-    print(f"Total cost: ${plan.total_cost_usd:.2f}")
-    print(f"Notes: {plan.notes}")
+    iter_word = "iteration" if iterations == 1 else "iterations"
+    print(f" Plan approved in {iterations} {iter_word} · ${plan.total_cost_usd:.2f}")
+    print(_THIN)
+    if plan.notes:
+        print(f"\n{plan.notes}\n")
+    print("MENU")
     for r in plan.recipes:
-        print(f"\n• {r.name} (serves {r.serves}) — accommodates: {r.accommodates}")
+        tags = ", ".join(r.accommodates) if r.accommodates else "—"
+        print(f"\n• {r.name} (serves {r.serves} · accommodates: {tags})")
         for ing in r.ingredients:
             cost = (
                 f"${ing.estimated_cost_usd:.2f}"
@@ -299,22 +457,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
 
     constraints = SCENARIOS[args.scenario]
-    print(
-        f"Running AGEP scenario '{args.scenario}' with backend "
-        f"'{os.getenv('AGEP_LLM', 'claude-code')}'"
-    )
-    print(f"Constraints: {constraints.model_dump_json()}\n")
+    _print_header(args.scenario, os.getenv("AGEP_LLM", "claude-code"), constraints)
 
     try:
         final_state = asyncio.run(run_scenario(constraints))
     except ConstraintConflictError as e:
-        print(f"\n❌ ConstraintConflictError: {e}")
+        print(f"\nConstraintConflictError: {e}")
         return 2
     except RuntimeError as e:
-        print(f"\n❌ {e}")
+        print(f"\n{e}")
         return 3
 
-    _print_receipt(final_state)
+    _print_receipt(final_state, final_state.get("_iterations", 0))
     return 0
 
 

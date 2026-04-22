@@ -82,73 +82,76 @@ Demonstrates: Iterative Loop; Verifier audit sweeping every ingredient.
 ```
 $ python main.py --scenario happy
 
-Running AGEP scenario 'happy' with backend 'claude-code'
-Constraints: {"guests":6,"budget_usd":200.0,"required_ingredients":["Salmon","Quinoa"],"dietary_restrictions":["vegan","nut-allergy"]}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ AGEP · scenario 'happy' · backend claude-code
+ 6 guests · $200 budget · required: Salmon, Quinoa · restrictions: vegan, nut-allergy
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  [architect] ```json {   "recipes": [     {       "name": "Pan-Seared Salmon with Lemon-Caper-Dill Sauce", ...
-  [executor] → tool price_menu_plan({"plan_json": "{\"recipes\":[{\"name\":\"Pan-Seared Salmon..."})
-  [executor] ← price_menu_plan = {"grounded_plan": {...}, "unknown_ingredients": [], "source": "simulated"}
-  [executor] {"recipes":[{"name":"Pan-Seared Salmon...","ingredients":[{"name":"salmon","quantity":2.5,...}], ...
-  [critic]   {"status": "approved", "reason": "Total cost of $71.32 is well within the $200 budget, all required
-              ingredients (salmon, quinoa) are present, dietary restrictions honoured..."}
-  [verifier] → tool audit_menu_plan({"plan_json": "...", "restrictions": ["vegan","nut-allergy"]})
-  [verifier] ← audit_menu_plan = {"status": "approved", "violations": [], "audited_count": 33}
-  [verifier] → tool approve_plan({})
-  [verifier] ← approve_plan = {"approved": true}
-  [verifier] {"status": "approved", "violations": []}
+Iteration 1
+  architect  → drafted 4 recipes
+  executor   → price_menu_plan(4 recipes, 34 ingredients)
+  executor   ← $79.81 total · 0 unknown ingredients
+  executor   → returned priced plan ($79.81)
+  critic     → APPROVED · "Total cost of $79.81 is well within the $200 budget…"
+  verifier   → audit_menu_plan(34 ingredients, [vegan, nut-allergy])
+  verifier   ← APPROVED · 34 ingredients checked · 0 violations
+  verifier   → approve_plan — loop exits
+  verifier   ← approved=True
 
-============================================================
-AGEP RESULT — plan approved
-============================================================
-Total cost: $71.32
+────────────────────────────────────────────────────────────
+ Plan approved in 1 iteration · $79.81
+────────────────────────────────────────────────────────────
 
-• Pan-Seared Salmon with Lemon-Caper-Dill Sauce (serves 6) — accommodates: ['nut-allergy-safe']
-    - 2.5 lb salmon               $30.00
-    - 4.0 tbsp olive oil            $2.00
+MENU
+
+• Mixed Greens Salad with Lemon-Dijon Vinaigrette (serves 6 · accommodates: vegan, nut-allergy)
+    - 1.0 lb mixed greens         $4.00
+    - 0.5 lb cherry tomatoes      $1.75
+    - 2.0 count cucumber             $2.00
+    - 1.0 bunch radish               $2.00
     - 2.0 count lemon                $1.50
-    - 2.0 tbsp capers               $0.80
-    - 4.0 clove garlic               $1.00
+    - 3.0 tbsp olive oil            $1.50
+    - 1.0 tbsp dijon mustard        $0.30
+    - 1.0 tsp sea salt             $0.05
+    - 0.5 tsp black pepper         $0.07
+
+• Lemon-Dill Baked Salmon with Capers (serves 6 · accommodates: nut-allergy)
+    - 3.0 lb salmon               $36.00
+    - 2.0 count lemon                $1.50
     - 1.0 bunch dill                 $1.80
-    - 2.0 count shallot              $1.60
+    - 4.0 clove garlic               $1.00
+    - 2.0 tbsp olive oil            $1.00
+    - 2.0 tbsp capers               $0.80
     - 2.0 tsp sea salt             $0.10
     - 1.0 tsp black pepper         $0.15
 
-• Herbed Quinoa Pilaf (serves 6) — accommodates: ['vegan', 'nut-allergy-safe']
+• Herbed Quinoa Pilaf with Roasted Cherry Tomatoes (serves 6 · accommodates: vegan, nut-allergy)
     - 1.5 lb quinoa               $6.00
-    - 4.0 cup vegetable broth      $0.80
-    - 3.0 clove garlic               $0.75
+    - 3.0 cup vegetable broth      $0.60
     - 1.0 count onion                $0.75
-    - 1.0 bunch parsley              $1.50
-    - 3.0 tbsp olive oil            $1.50
-    - 1.0 count lemon                $0.75
-    - 1.0 tsp sea salt             $0.05
-    - 0.5 tsp black pepper         $0.07
-
-• Garlic-Roasted Asparagus with Lemon (serves 6) — accommodates: ['vegan', 'nut-allergy-safe']
-    - 1.5 lb asparagus            $6.00
-    - 2.0 tbsp olive oil            $1.00
-    - 3.0 clove garlic               $0.75
-    - 1.0 count lemon                $0.75
-    - 1.0 tsp sea salt             $0.05
-    - 0.5 tsp black pepper         $0.07
-
-• Mixed Greens Salad with Tahini-Lemon Dressing (serves 6) — accommodates: ['vegan', 'nut-allergy-safe']
-    - 0.75 lb mixed greens         $3.00
-    - 1.0 count cucumber             $1.00
+    - 4.0 clove garlic               $1.00
     - 0.5 lb cherry tomatoes      $1.75
-    - 1.0 bunch radish               $2.00
-    - 3.0 tbsp tahini               $1.80
+    - 1.0 bunch parsley              $1.50
     - 1.0 count lemon                $0.75
     - 2.0 tbsp olive oil            $1.00
-    - 1.0 clove garlic               $0.25
-    - 0.5 tsp sea salt             $0.03
+    - 1.0 tsp cumin                $0.20
+    - 1.0 tsp sea salt             $0.05
+    - 0.5 tsp black pepper         $0.07
+
+• Garlic Roasted Asparagus with Lemon (serves 6 · accommodates: vegan, nut-allergy)
+    - 2.0 lb asparagus            $8.00
+    - 3.0 clove garlic               $0.75
+    - 2.0 tbsp olive oil            $1.00
+    - 1.0 count lemon                $0.75
+    - 1.0 tsp sea salt             $0.05
+    - 0.5 tsp black pepper         $0.07
 ```
 
 **What to notice:**
 - Converged in **one iteration** — the cheap, clean path.
-- `audited_count: 33` — every ingredient was individually checked against the
-  nut-allergy + vegan rules. The Hallucination Prevention Loop runs on every
-  iteration, even when clean.
+- `34 ingredients checked · 0 violations` — every ingredient was individually
+  audited against the nut-allergy + vegan rules. The Hallucination Prevention
+  Loop runs on every iteration, even when clean.
 - Salmon is isolated to one dish (non-vegan but nut-safe). Three other dishes
   are fully vegan, so the vegan guest has real options.
 
@@ -163,80 +166,75 @@ Demonstrates: Correction Loop with explicit delta-instructions.
 ```
 $ python main.py --scenario budget_crunch
 
-Running AGEP scenario 'budget_crunch' with backend 'claude-code'
-Constraints: {"guests":6,"budget_usd":60.0,"required_ingredients":["Salmon","Quinoa"],"dietary_restrictions":["vegan","nut-allergy"]}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ AGEP · scenario 'budget_crunch' · backend claude-code
+ 6 guests · $60 budget · required: Salmon, Quinoa · restrictions: vegan, nut-allergy
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-── Iteration 1 ───────────────────────────────────────────────
+Iteration 1
+  architect  → drafted 3 recipes
+  executor   → price_menu_plan(3 recipes, 22 ingredients)
+  executor   ← $62.75 total · 0 unknown ingredients
+  executor   → returned priced plan ($62.75)
+  critic     → REJECTED · "Total computed cost is $62.75, which exceeds the $60.00 budget by $2.75." · 2 delta-instructions
+  verifier   → audit_menu_plan(22 ingredients, [vegan, nut-allergy])
+  verifier   ← APPROVED · 22 ingredients checked · 0 violations
+  verifier   → APPROVED · 0 violations          ← audit clean; loop continues because critic rejected
 
-  [architect] ```json {   "recipes": [     {       "name": "Lemon-Dill Baked Salmon with Capers", ...
-  [executor] → tool price_menu_plan(...)
-  [executor] ← price_menu_plan = {"grounded_plan": {...}, "unknown_ingredients": [], ...}
-  [executor] {"recipes":[...,"salmon","quantity":2.5,"unit":"lb","estimated_cost_usd":30.0,...], ...}
-  [critic]   {"status": "rejected",
-              "reason": "Total cost of $62.10 exceeds the $60.00 budget by $2.10.",
-              "delta_instructions": ["Reduce salmon from 2.5 lb to 2.3 lb (save $2.40)",
-                                     "..."]}
-  [verifier] → tool audit_menu_plan(...)
-  [verifier] ← audit_menu_plan = {"status": "approved", "violations": [], "audited_count": 24}
-  [verifier] {"status": "approved", "violations": []}    ← audit clean, but critic rejected → loop continues
+Iteration 2
+  architect  → drafted 3 recipes                 ← applied the delta instruction
+  executor   → price_menu_plan(3 recipes, 22 ingredients)
+  executor   ← $59.75 total · 0 unknown ingredients
+  executor   → returned priced plan ($59.75)
+  critic     → APPROVED · "Total computed cost is $59.75, which is within the $60.00 budget…"
+  verifier   → audit_menu_plan(22 ingredients, [vegan, nut-allergy])
+  verifier   ← APPROVED · 22 ingredients checked · 0 violations
+  verifier   → approve_plan — loop exits
+  verifier   ← approved=True
 
-── Iteration 2 ───────────────────────────────────────────────
+────────────────────────────────────────────────────────────
+ Plan approved in 2 iterations · $59.75
+────────────────────────────────────────────────────────────
 
-  [architect] ```json {   "recipes": [ ... "salmon", "quantity": 2.3, ... ]   (applied the delta instruction)
-  [executor] → tool price_menu_plan(...)
-  [executor] ← price_menu_plan = {"grounded_plan": {...}, ...}
-  [executor] {"recipes":[...,"salmon","quantity":2.3,"unit":"lb","estimated_cost_usd":27.6,...], ...}
-  [critic]   {"status": "approved",
-              "reason": "Total cost of $59.70 is within the $60.00 budget, both required
-                         ingredients (salmon, quinoa) are present, caloric content is adequate..."}
-  [verifier] → tool audit_menu_plan(...)
-  [verifier] ← audit_menu_plan = {"status": "approved", "violations": [], "audited_count": 24}
-  [verifier] → tool approve_plan({})
-  [verifier] ← approve_plan = {"approved": true}
+MENU
 
-============================================================
-AGEP RESULT — plan approved
-============================================================
-Total cost: $59.70
-
-• Lemon-Dill Baked Salmon with Capers (serves 6) — accommodates: ['nut-allergy']
-    - 2.3 lb salmon               $27.60         ← reduced from 2.5 lb per delta
-    - 2.0 count lemon                $1.50
+• Lemon-Dill Baked Salmon (serves 6 · accommodates: nut-allergy)
+    - 2.25 lb salmon               $27.00        ← reduced from 2.5 lb per Critic delta
+    - 3.0 count lemon                $2.25
     - 1.0 bunch dill                 $1.80
-    - 3.0 tbsp capers               $1.20
+    - 2.0 tbsp capers               $0.80
     - 3.0 tbsp olive oil            $1.50
     - 4.0 clove garlic               $1.00
     - 2.0 tsp sea salt             $0.10
     - 1.0 tsp black pepper         $0.15
 
-• Herbed Quinoa Tabbouleh (serves 6) — accommodates: ['vegan', 'nut-allergy']
+• Quinoa Tabbouleh Salad (serves 6 · accommodates: vegan, nut-allergy)
     - 1.5 lb quinoa               $6.00
-    - 3.0 cup vegetable broth      $0.60
-    - 2.0 count cucumber             $2.00
     - 0.5 lb cherry tomatoes      $1.75
-    - 1.0 bunch parsley              $1.50
-    - 3.0 count scallion             $0.75
+    - 2.0 count cucumber             $2.00
+    - 2.0 bunch parsley              $3.00
     - 2.0 count lemon                $1.50
-    - 3.0 tbsp olive oil            $1.50
+    - 4.0 tbsp olive oil            $2.00
     - 1.0 tsp sea salt             $0.05
     - 1.0 tsp black pepper         $0.15
 
-• Garlic-Roasted Asparagus with Smoked Paprika (serves 6) — accommodates: ['vegan', 'nut-allergy']
+• Garlic Roasted Asparagus with Lemon (serves 6 · accommodates: vegan, nut-allergy)
     - 1.5 lb asparagus            $6.00
     - 2.0 tbsp olive oil            $1.00
-    - 4.0 clove garlic               $1.00
-    - 1.0 tsp smoked paprika       $0.25
-    - 1.0 tsp sea salt             $0.05
+    - 3.0 clove garlic               $0.75
     - 1.0 count lemon                $0.75
+    - 1.0 tsp sea salt             $0.05
+    - 1.0 tsp black pepper         $0.15
 ```
 
 **What to notice:**
-- Iteration 1 total: **$62.10** → Critic rejects with a concrete
-  delta-instruction: *"Reduce salmon from 2.5 lb to 2.3 lb (save $2.40)"*.
-- Iteration 2: Architect applies the delta literally, landing at **$59.70** —
-  within budget. Verifier clean → `approve_plan` → loop exits.
-- The Verifier approved both iterations; only the Critic objected. The loop
-  keeps going because the Verifier gates `approve_plan` on *both* its own
+- Iteration 1: total $62.75, Critic rejects and writes two concrete
+  delta-instructions to state.
+- Iteration 2: Architect applies the delta literally (salmon 2.5 lb → 2.25 lb),
+  landing at **$59.75** — within budget. Verifier clean → `approve_plan` →
+  loop exits.
+- The Verifier approved BOTH iterations; only the Critic objected. The loop
+  kept going because the Verifier gates `approve_plan` on *both* its own
   audit *and* the Critic's verdict being approved.
 
 ---
@@ -250,12 +248,13 @@ Demonstrates: `ConstraintConflictError` short-circuiting the loop.
 ```
 $ python main.py --scenario impossible
 
-Running AGEP scenario 'impossible' with backend 'claude-code'
-Constraints: {"guests":20,"budget_usd":10.0,"required_ingredients":[],"dietary_restrictions":[]}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ AGEP · scenario 'impossible' · backend claude-code
+ 20 guests · $10 budget · required: — · restrictions: —
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-
-❌ ConstraintConflictError: Budget of $10.00 for 20 guests = $0.50/guest,
-   below the floor of $8.00/guest. Constraints are mathematically infeasible.
+ConstraintConflictError: Budget of $10.00 for 20 guests = $0.50/guest,
+below the floor of $8.00/guest. Constraints are mathematically infeasible.
 ```
 
 **What to notice:**
@@ -268,16 +267,15 @@ Constraints: {"guests":20,"budget_usd":10.0,"required_ingredients":[],"dietary_r
 
 ### Hallucination Prevention — the Verifier's audit in detail
 
-You can see `audit_menu_plan` in every scenario's event stream. Here's what
-it reports on a clean run:
+You can see `audit_menu_plan` in every scenario's event stream. On a clean
+run it reports:
 
 ```
-[verifier] ← audit_menu_plan = {"status": "approved", "violations": [], "audited_count": 33}
+  verifier   ← APPROVED · 34 ingredients checked · 0 violations
 ```
 
-`audited_count: 33` means 33 individual ingredient checks were performed
-against the user's dietary restrictions. The audit applies two different
-rules depending on the restriction type:
+34 individual ingredient checks against the user's dietary restrictions. The
+audit applies two different rules depending on the restriction type:
 
 - **Global exclusions** (allergies like `nut-allergy`, `gluten-free`,
   `dairy-free`): NO dish may contain the allergen (cross-contamination).
@@ -285,9 +283,15 @@ rules depending on the restriction type:
   be fully compliant; others may be non-compliant.
 
 If a violation is found (e.g. the Architect reached for `almond flour` in a
-vegan dish while `nut-allergy` was in effect), the audit returns:
+vegan dish while `nut-allergy` was in effect), the event line reads:
 
 ```
+  verifier   ← REJECTED · 1 violation of 34 checked
+```
+
+…and the underlying tool payload carries the detail:
+
+```json
 {
   "status": "rejected",
   "violations": [
