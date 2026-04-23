@@ -3,12 +3,12 @@
 > A six-agent system that turns a dinner-party request into a printable booklet — priced menu, step-by-step cooking instructions, and AI-plated dish photography — with a built-in red team that catches what a deterministic safety check can't.
 
 <p align="center">
-  <video src="https://github.com/IrfanThomson/agep/releases/download/v3-media/agep-explained.mp4" controls width="80%" muted playsinline>
-    Your renderer doesn't support inline video — <a href="https://github.com/IrfanThomson/agep/releases/download/v3-media/agep-explained.mp4">click to watch the explainer</a>.
-  </video>
+  <a href="https://youtu.be/Q2C8U8drwak">
+    <img src="https://img.youtube.com/vi/Q2C8U8drwak/maxresdefault.jpg" width="80%" alt="Watch the AGEP explainer on YouTube">
+  </a>
 </p>
 
-<p align="center"><a href="https://github.com/IrfanThomson/agep/releases/download/v3-media/agep-explained.mp4"><em>▶ Watch the explainer</em></a></p>
+<p align="center"><a href="https://youtu.be/Q2C8U8drwak"><strong>▶ Watch the explainer (6:39)</strong></a></p>
 
 <p align="center">
   <img src="docs/images/happy/herb-baked-salmon.png" width="22%" alt="Herb-Baked Salmon">
