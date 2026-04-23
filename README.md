@@ -1,28 +1,20 @@
-# AGEP v3 — Autonomous Gourmet Event Planner with Cookable Output
+# AGEP — Autonomous Gourmet Event Planner
 
 A **six-agent** Plan-Act-Reflect-RedTeam-then-Cook system on [Google Agent
 Development Kit][adk] that turns a dinner-party request into a printable
 booklet: a priced menu, step-by-step cooking instructions, and (optionally)
-AI-generated dish photography. v3 takes the v2 safety pipeline — Architect,
-Executor, Critic, Verifier, Saboteur — and bolts on a post-loop **Chef**
-stage plus operational constraints (kitchen equipment, prep-time ceiling,
-calorie / protein floors), so the approved plan is something you can actually
-walk into the kitchen and execute.
+AI-generated dish photography. Five agents — Architect, Executor, Critic,
+Verifier, Saboteur — run inside a safety loop that produces an approved
+plan respecting budget, dietary restrictions, kitchen equipment, prep-time
+ceilings, and calorie / protein floors. A sixth agent — Chef — runs in a
+separate post-loop runner to write step-by-step cooking instructions for
+the approved menu. The result is a plan you can walk into the kitchen and
+execute.
 
 The default backend is **Claude Code headless** — no API key needed to run
-locally. The default grocery backend is the same in-process simulator from
-v1/v2, with **Spoonacular** available as a one-env-var swap. Dish image
-generation is opt-in and falls back silently when not configured.
-
-> **Relationship to v2.** v3 is strictly additive on the safety side.
-> Same five-agent loop, same `LoopAgent(max_iterations=5)`, same
-> `approve_plan` gate, same Adversarial Consensus rule. The Critic gained
-> three new validation tools (equipment, prep time, macros), the Architect's
-> prompt knows how to respect them, and a sixth agent (Chef) now runs in
-> its **own runner** after the loop terminates. v1 and v2 are preserved as
-> the [`v1`](https://github.com/IrfanThomson/agep/tree/v1) and
-> [`v2`](https://github.com/IrfanThomson/agep/tree/v2) branches for direct
-> comparison.
+locally. The default grocery backend is an in-process simulator, with
+**Spoonacular** available as a one-env-var swap. Dish image generation is
+opt-in and falls back silently when not configured.
 
 [adk]: https://google.github.io/adk-docs/
 
@@ -116,15 +108,11 @@ loop state.
 
 ---
 
-## What v3 adds
+## Operational constraints and validation
 
-v2 shipped a safe menu. v3 ships a *cookable* menu. Four pieces, in order
-of how they wire into the loop:
-
-### 1. Operational constraints (equipment, prep time, macros)
-
-The Critic is no longer just a budget watchdog. Three new tools turn it into
-a full operational gate:
+The Critic is a full operational gate, not just a budget watchdog. Three
+validation tools cover equipment, prep time, and macros in addition to
+budget:
 
 - **`check_equipment(plan_json, available_equipment)`** — every recipe in
   the plan declares a `required_equipment` list. The tool computes
@@ -150,10 +138,9 @@ delta-instruction list. The Architect re-plans with the deltas in hand.
 
 These constraints are all **opt-in via the EventConstraints model**. Leave
 `kitchen_equipment` empty and `max_prep_minutes` / the macro floors `None`,
-and the Critic skips those tools entirely — v2 behaviour is preserved
-exactly.
+and the Critic skips those tools entirely.
 
-### 2. Cooking instructions (Chef agent, outside the loop)
+## Cooking instructions
 
 After the safety loop approves, `main.py` constructs a brand-new
 `InMemoryRunner` for a single agent — the Chef — with a fresh session
@@ -171,12 +158,14 @@ exception, prints `chef → ERROR · …`, and renders the menu without steps.
 
 `--no-chef` skips the stage entirely.
 
-### 3. Real grocery pricing (Spoonacular adapter, optional)
+## Optional integrations
 
-The Executor's tool, `price_menu_plan`, is now a dispatcher:
+### Real grocery pricing (Spoonacular adapter)
+
+The Executor's tool, `price_menu_plan`, is a dispatcher:
 
 - `AGEP_GROCERY=simulated` *(default)* routes to the bundled in-process
-  database from v1/v2. Zero dependencies, deterministic, free.
+  database. Zero dependencies, deterministic, free.
 - `AGEP_GROCERY=spoonacular` routes to `tools_spoonacular.py`, which calls
   the Spoonacular Food API over HTTPS. Requires `SPOONACULAR_API_KEY` and
   the `requests` package. The free tier is 150 requests/day.
@@ -189,7 +178,7 @@ appearing in four recipes) costs one search and one price call rather than
 eight. Failures on a single ingredient mark it `unknown` and let the loop
 continue, mirroring the simulated backend's tolerance.
 
-### 4. Dish images (Gemini image gen, optional)
+### Dish images (Gemini image gen)
 
 When `GOOGLE_API_KEY` is set and `google-genai` is installed,
 `images.generate_dish_images` runs once after the Chef stage, asks Gemini
@@ -208,15 +197,13 @@ without images. There is no crash path — image gen is a pure garnish.
 
 ## Live demo
 
-The six built-in scenarios below exercise the full v3 surface. The first
-four are unchanged from v2 and their captured logs are preserved verbatim;
-the last two are new and exercise the v3 Critic tools.
+The six built-in scenarios below exercise the full system surface.
 
-### Scenario 1 — v3 happy path (every check passes on the first try)
+### Scenario 1 — Happy path (every check passes on the first try)
 
 > 6 guests · $200 · Salmon + Quinoa required · vegan + nut-allergy
 
-Demonstrates: the cleanest v3 trace — Critic, Verifier, and Saboteur all
+Demonstrates: the cleanest trace — Critic, Verifier, and Saboteur all
 clear in iteration 1, the loop exits, and Chef appends per-recipe
 instructions in its own runner afterward.
 
@@ -316,7 +303,7 @@ MENU
   cross-contamination threat model on the priced plan — finds nothing
   worth escalating and goes straight to `approve_plan`. The loop exits
   after one pass.
-- **Each recipe header now carries v3 metadata**: prep minutes (e.g.
+- **Each recipe header carries operational metadata**: prep minutes (e.g.
   `30 min`) and required equipment (e.g. `stovetop, mixing bowl`) appear
   inline. These are written by the Architect into the plan and are what
   the Critic's `validate_prep_time` and `check_equipment` tools read in
@@ -426,12 +413,11 @@ MENU
 
 **What to notice:**
 - Iteration 1 total: **$64.84** → Critic rejects with **5 delta-instructions**
-  (a v3 polish over v2's single combined instruction — each cost lever
-  becomes its own actionable delta the Architect can apply independently).
-  The Saboteur *also* refuses to approve, citing `plan rejected by
-  Critic`. This is by design: the Saboteur's prompt explicitly checks
-  `critique.status` first, so the red-teamer won't rubber-stamp a plan the
-  budget auditor has already rejected.
+  — each cost lever becomes its own actionable delta the Architect can
+  apply independently. The Saboteur *also* refuses to approve, citing
+  `plan rejected by Critic`. This is by design: the Saboteur's prompt
+  explicitly checks `critique.status` first, so the red-teamer won't
+  rubber-stamp a plan the budget auditor has already rejected.
 - Iteration 2: total drops to **$56.34** (salmon reduced from 2.5 lb to
   2.0 lb, quinoa from 1.5 lb to 1.25 lb, parsley from 2 bunches to 1 —
   three simultaneous cost levers from the granular deltas), all three
@@ -468,7 +454,7 @@ ConstraintConflictError: Budget of $10.00 for 20 guests = $0.50/guest, below the
 
 ---
 
-### Scenario 4 — Hidden Gluten *(the v2 headline demo)*
+### Scenario 4 — Hidden Gluten
 
 > 6 guests · $150 · **rolled oats** required · **gluten-free**
 
@@ -594,8 +580,8 @@ MENU
 - **The Verifier's audit approved on both iterations.** That's not a bug —
   the tool faithfully reported what it knew: a generic ingredient name
   like `vinegar` has no `gluten` tag in `_NUTRITION_DB`, so the
-  deterministic audit has no basis to flag it. A celiac guest following
-  only the v1 pipeline could have been served malt vinegar.
+  deterministic audit has no basis to flag it. A celiac guest relying on
+  the deterministic audit alone could have been served malt vinegar.
 - **Iteration 1 Saboteur catches the unspecified vinegar**: *"The Avocado
   and Mixed Greens Salad calls for 'vinegar' with no type specified; malt
   vinegar is derived from barley and contains gluten."* The report is
@@ -608,19 +594,19 @@ MENU
   appear in the plan's `notes` field — human-facing sourcing instructions
   that would land on the grocery list. Saboteur verifies the mitigations
   are now documented, calls `approve_plan`, loop exits.
-- **This is exactly the v2 thesis, surviving into v3**: the deterministic
+- **This is the core thesis of Adversarial Consensus**: the deterministic
   audit is necessary but insufficient; the LLM-based adversary covers the
   gaps. Either one alone ships a broken menu; together they ship a safe
   one.
 
 ---
 
-### Scenario 5 — Weeknight (equipment + prep-time floor) *(new in v3)*
+### Scenario 5 — Weeknight (equipment + prep-time floor)
 
 > 4 guests · $80 · **chicken breast** required · equipment = stovetop +
 > sheet pan + mixing bowl · max prep 45 min
 
-Demonstrates: v3's new operational validators in action. Both
+Demonstrates: the operational validators in action. Both
 `check_equipment` and `validate_prep_time` fire in iteration 1, both
 clear, and the Architect respects the 45-minute ceiling on its first
 draft.
@@ -728,12 +714,12 @@ MENU
 
 ---
 
-### Scenario 6 — Macro Floor (calorie + protein floors) *(new in v3)*
+### Scenario 6 — Macro Floor (calorie + protein floors)
 
 > 4 guests · $120 · **salmon** required · nut-allergy · calorie floor
 > 700 kcal/guest · protein floor 40 g/guest
 
-Demonstrates: v3's `validate_nutrition_macros` tool confirming portion
+Demonstrates: the `validate_nutrition_macros` tool confirming portion
 sizes meet the stated floors. The Critic adds a fourth tool call to its
 sequence; the tool aggregates per-guest macros across every recipe and
 clears comfortably.
@@ -882,7 +868,7 @@ export GOOGLE_API_KEY=...
 python main.py --scenario hidden_gluten --backend gemini
 ```
 
-### Optional integrations *(new in v3)*
+### Optional integrations
 
 Both are no-op when not configured — AGEP's default zero-config path
 doesn't pay for them.
@@ -1047,6 +1033,15 @@ For `weeknight`, assert `sum(r.prep_minutes) <= 45` and that no recipe's
   - Claude Code installed and authenticated locally (default), OR
   - `ANTHROPIC_API_KEY` + `google-adk[extensions]`, OR
   - `GOOGLE_API_KEY`
-- Optional v3 extras (no-op when absent):
+- Optional extras (no-op when absent):
   - `requests` + `SPOONACULAR_API_KEY` for live grocery pricing
   - `google-genai` + `GOOGLE_API_KEY` for dish-image generation
+
+---
+
+## History
+
+Earlier iterations of AGEP are preserved as the
+[`v1`](https://github.com/IrfanThomson/agep/tree/v1) and
+[`v2`](https://github.com/IrfanThomson/agep/tree/v2) branches for those
+interested in how the architecture evolved.
