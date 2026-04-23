@@ -3,6 +3,10 @@
 > A six-agent system that turns a dinner-party request into a printable booklet — priced menu, step-by-step cooking instructions, and AI-plated dish photography — with a built-in red team that catches what a deterministic safety check can't.
 
 <p align="center">
+  <video src="docs/agep-demo.mp4" controls width="80%" muted playsinline></video>
+</p>
+
+<p align="center">
   <img src="docs/images/happy/herb-baked-salmon.png" width="22%" alt="Herb-Baked Salmon">
   <img src="docs/images/happy/quinoa-tabbouleh.png" width="22%" alt="Lemon-Herb Quinoa Tabbouleh">
   <img src="docs/images/happy/roasted-vegetables.png" width="22%" alt="Roasted Zucchini, Bell Pepper & Eggplant">
