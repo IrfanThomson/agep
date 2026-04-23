@@ -212,12 +212,13 @@ The six built-in scenarios below exercise the full v3 surface. The first
 four are unchanged from v2 and their captured logs are preserved verbatim;
 the last two are new and exercise the v3 Critic tools.
 
-### Scenario 1 — Happy path (Saboteur catches wine-fined dijon)
+### Scenario 1 — v3 happy path (every check passes on the first try)
 
 > 6 guests · $200 · Salmon + Quinoa required · vegan + nut-allergy
 
-Demonstrates: Iterative Loop; Saboteur catching a non-obvious loophole the
-Verifier's tool cannot see (vegan contamination via wine-fined dijon mustard).
+Demonstrates: the cleanest v3 trace — Critic, Verifier, and Saboteur all
+clear in iteration 1, the loop exits, and Chef appends per-recipe
+instructions in its own runner afterward.
 
 ```
 $ python main.py --scenario happy
@@ -229,98 +230,102 @@ $ python main.py --scenario happy
 
 Iteration 1
   architect  → drafted 4 recipes
-  executor   → price_menu_plan(4 recipes, 39 ingredients)
-  executor   ← $90.65 total · 0 unknown ingredients
-  executor   → returned priced plan ($90.65)
-  critic     → APPROVED · "Total cost of $90.65 is well within the $200 budget, all required ingredients (salmon, qu…"
-  verifier   → audit_menu_plan(39 ingredients, [vegan, nut-allergy])
-  verifier   ← APPROVED · 39 ingredients checked · 0 violations
-  verifier   → APPROVED · 0 violations
-  saboteur   → LOOPHOLE · "Dijon mustard in Dish 4 (the vegan salad vinaigrette) traditionally contains white wine, …"
-
-Iteration 2
-  architect  → drafted 4 recipes
-  executor   → price_menu_plan(4 recipes, 39 ingredients)
-  executor   ← $91.85 total · 0 unknown ingredients
-  executor   → returned priced plan ($91.85)
-  critic     → APPROVED · "Total cost of $91.85 is well within the $200 budget, all required ingredients (salmon, qu…"
-  verifier   → audit_menu_plan(39 ingredients, [vegan, nut-allergy])
-  verifier   ← APPROVED · 39 ingredients checked · 0 violations
+  executor   → price_menu_plan(4 recipes, 34 ingredients)
+  executor   ← $86.69 total · 0 unknown · source=simulated
+  executor   → returned priced plan ($86.69)
+  critic     → APPROVED · "all checks passed"
+  verifier   → audit_menu_plan(34 ingredients, [vegan, nut-allergy])
+  verifier   ← APPROVED · 34 ingredients checked · 0 violations
   verifier   → APPROVED · 0 violations
   saboteur   → approve_plan — loop exits
   saboteur   ← approved=True
-  saboteur   → CLEAR · "Audited all 39 ingredients across four dishes against the full threat model (cross-contam…"
+  saboteur   → CLEAR · "Audited all 34 ingredients across 4 recipes against the full threat model: no hidden alle…"
+
+Chef
+  chef       → wrote instructions for 4 recipes
 
 ────────────────────────────────────────────────────────────
- Plan approved in 2 iterations · $91.85
+ Plan approved in 1 iteration · $86.69 · 115 min prep
 ────────────────────────────────────────────────────────────
+
+REQUIRED INGREDIENTS: Salmon anchors the main course (3 lb for 6 guests); Quinoa forms the base of the tabbouleh side. NUT ALLERGY (global): every recipe has been scrubbed of all tree-nut and peanut-adjacent pantry items — almonds, walnuts, pine nuts, cashew cream, and almond flour are absent from the entire menu. VEGAN (per-guest preference): three of the four dishes (Quinoa Tabbouleh, Roasted Vegetables, Warm Chickpeas with Spinach) are fully plant-based, giving vegan guests a complete, balanced meal. The salmon main is intentionally non-vegan to leverage the required ingredient. KITCHEN EQUIPMENT: kitchen_equipment list was empty, so a standard home kitchen (oven, stovetop, mixing bowl) is assumed — all recipes use only these. BUDGET: estimated spend is well under $100, leaving ample headroom within the $200 ceiling.
 
 MENU
 
-• Pan-Seared Salmon with Lemon-Dill-Caper Sauce (serves 6 · accommodates: nut-free)
+• Herb-Baked Salmon with Lemon, Dill & Smoked Paprika (serves 6 · accommodates: nut-allergy · 30 min · oven, mixing bowl)
     - 3.0 lb salmon               $36.00
     - 4.0 tbsp olive oil            $2.00
-    - 3.0 count lemon                $2.25
     - 4.0 clove garlic               $1.00
     - 1.0 bunch dill                 $1.80
-    - 2.0 tbsp capers               $0.80
-    - 1.0 tbsp dijon mustard        $0.30
-    - 2.0 tsp sea salt             $0.10
-    - 1.0 tsp black pepper         $0.15
-
-• Herbed Quinoa Pilaf with Roasted Vegetables (serves 6 · accommodates: vegan, nut-free)
-    - 2.0 lb quinoa               $8.00
-    - 4.0 cup vegetable broth      $0.80
-    - 3.0 tbsp olive oil            $1.50
-    - 1.0 count onion                $0.75
-    - 3.0 clove garlic               $0.75
-    - 2.0 count bell pepper          $3.00
-    - 0.5 lb cherry tomatoes      $1.75
-    - 1.0 bunch parsley              $1.50
-    - 1.0 count lemon                $0.75
-    - 1.0 tsp cumin                $0.20
+    - 1.0 bunch thyme                $2.00
+    - 2.0 count lemon                $1.50
     - 1.0 tsp smoked paprika       $0.25
-    - 2.0 tsp sea salt             $0.10
+    - 1.0 tsp sea salt             $0.05
     - 1.0 tsp black pepper         $0.15
+    Instructions:
+      1. Preheat oven to 400 F.
+      2. Mince 4 garlic cloves.
+      3. Strip leaves from 1 bunch of dill and 1 bunch of thyme, then finely chop both.
+      4. Juice 1 lemon into a mixing bowl; slice the second lemon into thin rounds and set aside.
+      5. Add 4 tbsp olive oil, minced garlic, chopped dill, chopped thyme, 1 tsp smoked paprika, 1 tsp sea salt, and 1 tsp black pepper to the bowl with the lemon juice; stir until a uniform marinade forms.
+      6. Line a rimmed baking sheet with foil or parchment and place the 3 lb salmon skin-side down on it.
+      7. Spread the herb marinade evenly over the entire top surface of the salmon.
+      8. Arrange the lemon rounds in a single layer on top of the coated salmon.
+      9. Bake on the center rack for 20–25 minutes until the thickest part flakes easily with a fork and registers an internal temperature of 145 F.
+      10. Remove from the oven and rest undisturbed for 5 minutes.
+      11. Slice into 6 equal portions, spoon any accumulated pan juices over each piece, and transfer to a serving platter.
 
-• Roasted Asparagus with Garlic and Lemon (serves 6 · accommodates: vegan, nut-free)
-    - 2.0 lb asparagus            $8.00
+• Lemon-Herb Quinoa Tabbouleh (serves 6 · accommodates: vegan, nut-allergy · 30 min · stovetop, mixing bowl)
+    - 1.5 lb quinoa               $6.00
+    - 3.0 cup vegetable broth      $0.60
+    - 1.0 lb cherry tomatoes      $3.50
+    - 2.0 count cucumber             $2.00
+    - 1.0 bunch parsley              $1.50
+    - 2.0 count lemon                $1.50
+    - 3.0 tbsp olive oil            $1.50
+    - 1.0 tsp sea salt             $0.05
+    - 0.5 tsp black pepper         $0.07
+
+• Roasted Zucchini, Bell Pepper & Eggplant with Oregano (serves 6 · accommodates: vegan, nut-allergy · 35 min · oven, mixing bowl)
+    - 3.0 count zucchini             $4.50
+    - 3.0 count bell pepper          $4.50
+    - 1.0 lb eggplant             $2.00
+    - 3.0 tbsp olive oil            $1.50
+    - 4.0 clove garlic               $1.00
+    - 1.0 bunch oregano              $2.00
+    - 1.0 tsp sea salt             $0.05
+    - 0.5 tsp black pepper         $0.07
+
+• Warm Cumin Chickpeas with Spinach and Lemon (serves 6 · accommodates: vegan, nut-allergy · 20 min · stovetop)
+    - 1.5 lb chickpeas            $3.00
+    - 1.0 lb spinach              $3.00
+    - 2.0 count lemon                $1.50
     - 2.0 tbsp olive oil            $1.00
     - 3.0 clove garlic               $0.75
-    - 1.0 count lemon                $0.75
+    - 1.0 tsp cumin                $0.20
+    - 0.5 tsp chili flakes         $0.10
     - 1.0 tsp sea salt             $0.05
-    - 1.0 tsp black pepper         $0.15
 
-• Avocado and Mixed Greens Salad with Lemon-Herb Vinaigrette (serves 6 · accommodates: vegan, nut-free)
-    - 0.5 lb mixed greens         $2.00
-    - 3.0 count avocado              $5.25
-    - 2.0 count cucumber             $2.00
-    - 0.5 lb cherry tomatoes      $1.75
-    - 1.0 bunch radish               $2.00
-    - 3.0 tbsp olive oil            $1.50
-    - 2.0 tbsp vinegar              $0.30
-    - 1.0 count lemon                $0.75
-    - 1.0 bunch parsley              $1.50
-    - 1.0 tsp sea salt             $0.05
-    - 1.0 tsp black pepper         $0.15
+(instructions for remaining 3 recipes omitted for brevity — Chef writes them for every dish)
 ```
 
 **What to notice:**
-- **Iteration 1**: Critic approves (budget fine). Verifier's deterministic
-  audit also approves — `dijon mustard` is tagged `is_vegan=True` in the
-  nutrition database, so it passes the vegan check. **The Saboteur catches
-  it anyway**: Dijon mustard's white-wine content is often fined with
-  isinglass (fish bladder) or casein (dairy), making the mustard itself
-  arguably non-vegan even though the product is nominally plant-based.
-- **Iteration 2**: Architect reads `saboteur_report` from state, moves the
-  dijon out of the vegan-tagged salad and into the salmon dish (already
-  non-vegan). The per-guest vegan preference is satisfied by three other
-  dishes that contain no dijon at all. Saboteur runs the same threat model
-  on the revised plan, finds no unaddressed risk, calls `approve_plan`.
-- This is **exactly the class of loophole the v1 Verifier would have missed**
-  — the tool knows dijon's primary ingredients but not its typical
-  processing, so it's silent on the wine-fining vector. The Saboteur exists
-  specifically to cover that gap.
+- **Iteration 1 clears every gate**: Critic approves on `"all checks
+  passed"`, Verifier's deterministic audit finds 0 violations across 34
+  ingredients, and the Saboteur — running its full hidden-allergen and
+  cross-contamination threat model on the priced plan — finds nothing
+  worth escalating and goes straight to `approve_plan`. The loop exits
+  after one pass.
+- **Each recipe header now carries v3 metadata**: prep minutes (e.g.
+  `30 min`) and required equipment (e.g. `stovetop, mixing bowl`) appear
+  inline. These are written by the Architect into the plan and are what
+  the Critic's `validate_prep_time` and `check_equipment` tools read in
+  the constrained scenarios below.
+- **The Chef stage runs after the loop**, in its own runner. The trace
+  shows `chef → wrote instructions for 4 recipes`, and the printed menu
+  carries numbered, atomic steps with temperatures and timings under each
+  ingredient list. If Chef had crashed, the loop's approved plan would
+  still print — just without instructions.
 
 ---
 
@@ -342,75 +347,98 @@ $ python main.py --scenario budget_crunch
 Iteration 1
   architect  → drafted 3 recipes
   executor   → price_menu_plan(3 recipes, 23 ingredients)
-  executor   ← $63.80 total · 0 unknown ingredients
-  executor   → returned priced plan ($63.80)
-  critic     → REJECTED · "Total cost of $63.80 exceeds the $60.00 budget by $3.80." · 1 delta-instruction
+  executor   ← $64.84 total · 0 unknown · source=simulated
+  executor   → returned priced plan ($64.84)
+  critic     → REJECTED · "Total cost of $64.84 exceeds the $60.00 budget by $4.84." · 5 delta-instructions
   verifier   → audit_menu_plan(23 ingredients, [vegan, nut-allergy])
   verifier   ← APPROVED · 23 ingredients checked · 0 violations
   verifier   → APPROVED · 0 violations
-  saboteur   → LOOPHOLE · "plan exceeds budget; Critic rejected"
+  saboteur   → LOOPHOLE · "plan rejected by Critic"
 
 Iteration 2
   architect  → drafted 3 recipes
   executor   → price_menu_plan(3 recipes, 23 ingredients)
-  executor   ← $57.80 total · 0 unknown ingredients
-  executor   → returned priced plan ($57.80)
-  critic     → APPROVED · "Total cost of $57.80 is within the $60.00 budget, all dishes are nut-free, both required …"
+  executor   ← $56.34 total · 0 unknown · source=simulated
+  executor   → returned priced plan ($56.34)
+  critic     → APPROVED · "all checks passed"
   verifier   → audit_menu_plan(23 ingredients, [vegan, nut-allergy])
   verifier   ← APPROVED · 23 ingredients checked · 0 violations
   verifier   → APPROVED · 0 violations
   saboteur   → approve_plan — loop exits
   saboteur   ← approved=True
-  saboteur   → CLEAR · "Audited all 23 ingredients against the full threat model: no hidden allergens (no tahini,…"
+  saboteur   → CLEAR · "Audited all 23 ingredients across three recipes against hidden-allergen threat model: no …"
+
+Chef
+  chef       → wrote instructions for 3 recipes
 
 ────────────────────────────────────────────────────────────
- Plan approved in 2 iterations · $57.80
+ Plan approved in 2 iterations · $56.34 · 75 min prep
 ────────────────────────────────────────────────────────────
+
+ITERATION 2 — Budget correction applied per Critic delta_instructions and Saboteur proposed_fix. Three cost levers pulled simultaneously to create comfortable headroom below $60: (1) Salmon reduced from 2.5 lb to 2.0 lb (~5.3 oz per guest, still a satisfying portion supplemented by the hearty quinoa salad and asparagus side); (2) Quinoa reduced from 1.5 lb to 1.25 lb (still ample at ~3.3 oz dry per guest, which yields ~6.7 oz cooked); (3) Parsley reduced from 2 bunches to 1 bunch (one bunch is sufficient for tabbouleh flavor at this scale). Estimated total savings vs. prior plan: ~$6.00 (salmon) + ~$1.00 (quinoa) + ~$1.50 (parsley) = ~$8.50, bringing expected total to approximately $56–57, well under the $60 cap. REQUIRED INGREDIENTS: Salmon in Recipe 1, Quinoa in Recipe 2. NUT-ALLERGY (global): zero nut ingredients across all recipes. VEGAN (preference): Recipes 2 and 3 are fully vegan. No new nut-containing ingredients introduced. All recipes remain gluten-free and dairy-free.
 
 MENU
 
-• Herbed Quinoa Tabbouleh (serves 6 · accommodates: vegan, nut-free)
-    - 1.5 lb quinoa               $6.00
+• Pan-Seared Salmon with Dill, Capers & Lemon (serves 6 · accommodates: gluten-free, nut-free, dairy-free · 25 min · stovetop)
+    - 2.0 lb salmon               $24.00
+    - 4.0 tbsp olive oil            $2.00
+    - 1.0 bunch dill                 $1.80
+    - 2.0 tbsp capers               $0.80
+    - 2.0 count lemon                $1.50
+    - 4.0 clove garlic               $1.00
+    - 2.0 tsp sea salt             $0.10
+    - 1.0 tsp black pepper         $0.15
+    Instructions:
+      1. Pat 2 lb of salmon fillets completely dry with paper towels.
+      2. Season both sides of the salmon evenly with 2 tsp sea salt and 1 tsp black pepper.
+      3. Mince 4 garlic cloves and pick the fronds from 1 bunch of dill, keeping them separate.
+      4. Zest and juice both lemons, reserving the zest and juice in separate small bowls.
+      5. Heat 4 tbsp olive oil in a large skillet over medium-high heat until the oil shimmers and just begins to smoke.
+      6. Place the salmon fillets skin-side up in the skillet and sear undisturbed for 4 minutes.
+      7. Flip each fillet skin-side down, add the minced garlic to the pan around the fillets, and sear for an additional 3–4 minutes until the skin is crisp and the flesh is opaque through the center.
+      8. Scatter 2 tbsp capers directly into the pan and cook for 30 seconds, stirring them around the salmon.
+      9. Remove the pan from heat and drizzle the lemon juice over all fillets.
+      10. Transfer the salmon fillets to a serving platter, skin-side down.
+      11. Spoon the pan juices, capers, and garlic over each fillet.
+      12. Garnish with the fresh dill fronds and lemon zest, then serve immediately.
+
+• Quinoa Tabbouleh Salad (serves 6 · accommodates: vegan, gluten-free, nut-free, dairy-free · 30 min · stovetop, mixing bowl)
+    - 1.25 lb quinoa               $5.00
     - 0.5 lb cherry tomatoes      $1.75
     - 2.0 count cucumber             $2.00
     - 1.0 bunch parsley              $1.50
-    - 3.0 tbsp olive oil            $1.50
+    - 4.0 count scallion             $1.00
     - 2.0 count lemon                $1.50
-    - 2.0 tsp sea salt             $0.10
-    - 1.0 tsp black pepper         $0.15
-
-• Lemon-Dill Baked Salmon (serves 6 · accommodates: nut-free)
-    - 2.0 lb salmon               $24.00
-    - 2.0 count lemon                $1.50
-    - 1.0 bunch dill                 $1.80
     - 3.0 tbsp olive oil            $1.50
-    - 4.0 clove garlic               $1.00
-    - 2.0 tbsp capers               $0.80
-    - 2.0 tsp sea salt             $0.10
-    - 1.0 tsp black pepper         $0.15
+    - 1.0 tsp sea salt             $0.05
+    - 0.5 tsp black pepper         $0.07
 
-• Garlic-Roasted Asparagus with Cherry Tomatoes (serves 6 · accommodates: vegan, nut-free)
+• Roasted Asparagus with Garlic & Lemon (serves 6 · accommodates: vegan, gluten-free, nut-free, dairy-free · 20 min · oven, sheet pan)
     - 2.0 lb asparagus            $8.00
-    - 0.5 lb cherry tomatoes      $1.75
-    - 3.0 clove garlic               $0.75
     - 2.0 tbsp olive oil            $1.00
+    - 3.0 clove garlic               $0.75
     - 1.0 count lemon                $0.75
     - 1.0 tsp sea salt             $0.05
-    - 1.0 tsp black pepper         $0.15
+    - 0.5 tsp black pepper         $0.07
+
+(instructions for remaining 2 recipes omitted for brevity — Chef writes them for every dish)
 ```
 
 **What to notice:**
-- Iteration 1 total: **$63.80** → Critic rejects with a delta-instruction.
-  Notably, the Saboteur *also* refuses to approve, citing
-  `plan exceeds budget; Critic rejected`. This is by design: the
-  Saboteur's prompt explicitly checks `critique.status` first, so the
-  red-teamer won't rubber-stamp a plan the budget auditor has already
-  rejected. Both safety agents agree it's not ready.
-- Iteration 2: total drops to **$57.80** (salmon reduced from 2.5 lb to
-  2.0 lb per the delta-instruction), all three agents clear, Saboteur
-  calls `approve_plan`.
+- Iteration 1 total: **$64.84** → Critic rejects with **5 delta-instructions**
+  (a v3 polish over v2's single combined instruction — each cost lever
+  becomes its own actionable delta the Architect can apply independently).
+  The Saboteur *also* refuses to approve, citing `plan rejected by
+  Critic`. This is by design: the Saboteur's prompt explicitly checks
+  `critique.status` first, so the red-teamer won't rubber-stamp a plan the
+  budget auditor has already rejected.
+- Iteration 2: total drops to **$56.34** (salmon reduced from 2.5 lb to
+  2.0 lb, quinoa from 1.5 lb to 1.25 lb, parsley from 2 bunches to 1 —
+  three simultaneous cost levers from the granular deltas), all three
+  agents clear, Saboteur calls `approve_plan`.
 - The Saboteur running on a clean menu is cheap — the prompt is scoped so
   the red-teamer doesn't invent theoretical risks on a pared-down plan.
+  Chef then writes per-recipe steps for all three dishes.
 
 ---
 
@@ -445,8 +473,9 @@ ConstraintConflictError: Budget of $10.00 for 20 guests = $0.50/guest, below the
 > 6 guests · $150 · **rolled oats** required · **gluten-free**
 
 Demonstrates: Adversarial Consensus catching a real-world cross-contamination
-risk (rolled oats and vegetable broth commonly contain gluten even though
-the nutrition database tags them `allergens=[]`).
+risk the Verifier's tool can't see — this run, an unspecified `vinegar` in
+a salad dressing that could just as easily be malt vinegar (gluten-bearing,
+derived from barley) as apple cider or rice vinegar (safe).
 
 ```
 $ python main.py --scenario hidden_gluten
@@ -457,110 +486,132 @@ $ python main.py --scenario hidden_gluten
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Iteration 1
-  architect  → drafted 4 recipes
-  executor   → price_menu_plan(4 recipes, 42 ingredients)
-  executor   ← $112.85 total · 0 unknown ingredients
-  executor   → returned priced plan ($112.85)
-  critic     → APPROVED · "Total cost of $112.85 is within the $150.00 budget, all four courses accommodate gluten-f…"
-  verifier   → audit_menu_plan(42 ingredients, [gluten-free])
-  verifier   ← APPROVED · 42 ingredients checked · 0 violations
+  architect  → drafted 5 recipes
+  executor   → price_menu_plan(5 recipes, 39 ingredients)
+  executor   ← $73.03 total · 0 unknown · source=simulated
+  executor   → returned priced plan ($73.03)
+  critic     → APPROVED · "all checks passed"
+  verifier   → audit_menu_plan(39 ingredients, [gluten-free])
+  verifier   ← APPROVED · 39 ingredients checked · 0 violations
   verifier   → APPROVED · 0 violations
-  saboteur   → LOOPHOLE · "Commercial vegetable broth — used in two recipes totalling 7 cups — is not inherently glu…"
+  saboteur   → LOOPHOLE · "The Avocado and Mixed Greens Salad calls for 'vinegar' with no type specified; malt vineg…"
 
 Iteration 2
-  architect  → drafted 4 recipes
-  executor   → price_menu_plan(4 recipes, 42 ingredients)
-  executor   ← $112.85 total · 0 unknown ingredients
-  executor   → returned priced plan ($112.85)
-  critic     → APPROVED · "Total cost of $112.85 is within the $150.00 budget, all courses accommodate gluten-free r…"
-  verifier   → audit_menu_plan(42 ingredients, [gluten-free])
-  verifier   ← APPROVED · 42 ingredients checked · 0 violations
+  architect  → drafted 5 recipes
+  executor   → price_menu_plan(5 recipes, 39 ingredients)
+  executor   ← $73.03 total · 0 unknown · source=simulated
+  executor   → returned priced plan ($73.03)
+  critic     → APPROVED · "all checks passed"
+  verifier   → audit_menu_plan(39 ingredients, [gluten-free])
+  verifier   ← APPROVED · 39 ingredients checked · 0 violations
   verifier   → APPROVED · 0 violations
   saboteur   → approve_plan — loop exits
   saboteur   ← approved=True
-  saboteur   → CLEAR · no loophole found
+  saboteur   → CLEAR · "Audited all 39 ingredients across 5 recipes against the gluten-free threat model: certifi…"
+
+Chef
+  chef       → wrote instructions for 5 recipes
 
 ────────────────────────────────────────────────────────────
- Plan approved in 2 iterations · $112.85
+ Plan approved in 2 iterations · $73.03 · 165 min prep
 ────────────────────────────────────────────────────────────
 
-SOURCING CAVEAT — Rolled Oats: Oats are naturally gluten-free but are very frequently cross-contaminated with wheat at the farm or mill level. To keep this menu safe for all guests under the gluten-free restriction, ONLY certified gluten-free rolled oats must be purchased (look for GFCO certification or equivalent). This caveat applies to the Honey Almond Oat Bars. | SOURCING CAVEAT — Vegetable Broth: must be explicitly labelled gluten-free (e.g. Pacific Foods GF Vegetable Broth, Swanson Certified GF, or unseasoned homemade stock). Many mainstream brands and all bouillon cubes should be assumed to contain wheat unless the label states otherwise.
+GLUTEN-FREE SOURCING CAVEATS — TWO ITEMS REQUIRE CARE:
+
+1. ROLLED OATS: Naturally gluten-free but routinely cross-contaminated with wheat during milling and transport. You MUST purchase certified gluten-free rolled oats (e.g., Bob's Red Mill Gluten Free Rolled Oats). Standard supermarket oats are NOT safe for guests with celiac disease or gluten intolerance.
+
+2. VINEGAR (Avocado & Mixed Greens Salad): The 'vinegar' in this salad MUST be apple cider vinegar or white wine vinegar — both are distilled from gluten-free sources. Do NOT use malt vinegar; it is derived from barley and contains gluten. Rice vinegar is also an acceptable safe alternative. When shopping, read the label: any vinegar whose source grain is listed as 'barley' or 'malt' is off-limits.
+
+All other ingredients are inherently free of gluten-containing grains. Soy sauce (wheat-containing) was deliberately excluded from the entire menu. Menu structure: starter (oat fritters) → protein main (lemon-dill roasted salmon) → grain side (quinoa pilaf) → hearty vegetable side (sweet potato & black bean salad) → fresh salad. All five dishes are gluten-free; the three plant-based dishes are also vegan, providing broad dietary coverage. Total ingredient cost is well under the $150 budget for 6 guests.
 
 MENU
 
-• Creamy Coconut Lentil Soup (serves 6 · accommodates: gluten-free, vegan, vegetarian, dairy-free)
-    - 1.5 lb lentils              $3.75
-    - 2.0 can coconut milk         $7.00
-    - 4.0 cup vegetable broth      $0.80
-    - 2.0 count onion                $1.50
-    - 4.0 clove garlic               $1.00
-    - 2.0 tbsp ginger               $0.50
-    - 2.0 tsp turmeric             $0.40
-    - 2.0 tsp cumin                $0.40
-    - 1.0 lb carrot               $1.20
-    - 2.0 tbsp tomato paste         $1.00
-    - 2.0 tbsp olive oil            $1.00
-    - 2.0 tsp sea salt             $0.10
-    - 1.0 tsp black pepper         $0.15
-    - 1.0 bunch cilantro             $1.50
-    - 2.0 count lime                 $1.00
+• Savory Zucchini & Oat Fritters (serves 6 · accommodates: gluten-free · 30 min · stovetop, mixing bowl)
+    - 0.5 lb rolled oats          $0.75
+    - 2.0 count zucchini             $3.00
+    - 4.0 count eggs                 $1.60
+    - 1.0 count onion                $0.75
+    - 3.0 clove garlic               $0.75
+    - 3.0 tbsp olive oil            $1.50
+    - 1.0 tsp sea salt             $0.05
+    - 0.5 tsp black pepper         $0.07
+    Instructions:
+      1. Grate the 2 zucchini on the large holes of a box grater into a mixing bowl.
+      2. Sprinkle 0.5 tsp sea salt over the grated zucchini, toss to combine, and let stand 10 minutes to draw out moisture.
+      3. Transfer the salted zucchini to a clean kitchen towel and wring out as much liquid as possible.
+      4. Finely dice the 1 onion and mince the 3 garlic cloves.
+      5. In a large mixing bowl, combine the wrung-out zucchini, 0.5 lb certified gluten-free rolled oats, 4 eggs, diced onion, minced garlic, the remaining 0.5 tsp sea salt, and 0.5 tsp black pepper, then stir until a cohesive batter forms.
+      6. Heat 1.5 tbsp olive oil in a large skillet over medium heat until shimmering.
+      7. Scoop approximately 3 tablespoons of batter per fritter into the skillet, pressing each mound gently into a 3-inch round.
+      8. Cook the fritters 4 minutes per side until deep golden brown and cooked through.
+      9. Transfer the cooked fritters to a paper-towel-lined plate to drain briefly.
+      10. Repeat the oil-heating, scooping, and frying steps with the remaining 1.5 tbsp olive oil and remaining batter.
+      11. Arrange all fritters on a serving platter and serve hot.
 
-• Pan-Seared Salmon with Herb Quinoa (serves 6 · accommodates: gluten-free, dairy-free)
-    - 3.0 lb salmon               $36.00
-    - 1.5 lb quinoa               $6.00
-    - 3.0 cup vegetable broth      $0.60
-    - 4.0 clove garlic               $1.00
+• Lemon-Dill Roasted Salmon (serves 6 · accommodates: gluten-free, dairy-free · 35 min · oven, mixing bowl)
+    - 2.5 lb salmon               $30.00
     - 2.0 count lemon                $1.50
     - 1.0 bunch dill                 $1.80
-    - 1.0 bunch parsley              $1.50
     - 3.0 tbsp olive oil            $1.50
-    - 2.0 tbsp capers               $0.80
-    - 1.0 tsp sea salt             $0.05
-    - 1.0 tsp black pepper         $0.15
-
-• Roasted Asparagus and Cherry Tomato Salad with Pine Nuts (serves 6 · accommodates: gluten-free, vegan, vegetarian, dairy-free)
-    - 2.0 lb asparagus            $8.00
-    - 1.0 lb cherry tomatoes      $3.50
-    - 0.5 lb arugula              $2.00
-    - 0.25 lb pine nuts            $5.50
-    - 3.0 tbsp olive oil            $1.50
-    - 1.0 count lemon                $0.75
-    - 2.0 clove garlic               $0.50
+    - 4.0 clove garlic               $1.00
     - 1.0 tsp sea salt             $0.05
     - 0.5 tsp black pepper         $0.07
 
-• Honey Almond Oat Bars (serves 6 · accommodates: gluten-free, vegetarian)
-    - 1.5 lb rolled oats          $2.25
-    - 0.5 lb almond flour         $6.00
-    - 0.5 lb almonds              $5.50
-    - 4.0 tbsp honey                $1.60
-    - 2.0 tbsp maple syrup          $1.60
-    - 3.0 tbsp coconut oil          $1.80
+• Cumin Quinoa Pilaf with Roasted Bell Peppers (serves 6 · accommodates: gluten-free, vegan, dairy-free · 40 min · stovetop, oven, mixing bowl)
+    - 0.75 lb quinoa               $3.00
+    - 2.0 count bell pepper          $3.00
+    - 0.5 lb cherry tomatoes      $1.75
+    - 3.0 cup vegetable broth      $0.60
+    - 2.0 tbsp olive oil            $1.00
+    - 3.0 clove garlic               $0.75
+    - 1.0 tsp cumin                $0.20
+    - 1.0 tsp sea salt             $0.05
+
+• Roasted Sweet Potato & Black Bean Salad (serves 6 · accommodates: gluten-free, vegan, dairy-free · 45 min · oven, mixing bowl)
+    - 2.0 lb sweet potato         $3.00
+    - 1.0 lb black beans          $2.00
+    - 1.0 bunch cilantro             $1.50
+    - 2.0 count lime                 $1.00
+    - 1.0 tsp cumin                $0.20
+    - 1.0 tsp smoked paprika       $0.25
+    - 2.0 tbsp olive oil            $1.00
     - 0.5 tsp sea salt             $0.03
+
+• Avocado & Mixed Greens Salad (serves 6 · accommodates: gluten-free, vegan, dairy-free · 15 min · mixing bowl)
+    - 0.5 lb mixed greens         $2.00
+    - 2.0 count avocado              $3.50
+    - 0.25 lb cherry tomatoes      $0.88
+    - 1.0 count cucumber             $1.00
+    - 1.0 count lemon                $0.75
+    - 2.0 tbsp olive oil            $1.00
+    - 1.0 tbsp vinegar              $0.15
+    - 0.5 tsp sea salt             $0.03
+
+(instructions for remaining 4 recipes omitted for brevity — Chef writes them for every dish)
 ```
 
 **What to notice:**
 - **The Verifier's audit approved on both iterations.** That's not a bug —
-  the tool faithfully reported what it knew: neither `rolled oats` nor
-  `vegetable broth` has a `gluten` tag in `_NUTRITION_DB`, so the
-  deterministic audit has no basis to flag them. A celiac guest following
-  only the v1 pipeline would have been served gluten.
-- **Iteration 1 Saboteur catches the vegetable broth**: *"Commercial
-  vegetable broth is not inherently gluten-free — most mainstream brands
-  and all bouillon cubes contain wheat-derived ingredients unless
-  explicitly labelled GF."* The report is written to
-  `session.state.saboteur_report`.
+  the tool faithfully reported what it knew: a generic ingredient name
+  like `vinegar` has no `gluten` tag in `_NUTRITION_DB`, so the
+  deterministic audit has no basis to flag it. A celiac guest following
+  only the v1 pipeline could have been served malt vinegar.
+- **Iteration 1 Saboteur catches the unspecified vinegar**: *"The Avocado
+  and Mixed Greens Salad calls for 'vinegar' with no type specified; malt
+  vinegar is derived from barley and contains gluten."* The report is
+  written to `session.state.saboteur_report`.
 - **Iteration 2 Architect reads `saboteur_report` and applies the fix** —
-  but does more than asked. Rather than replacing the broth, it adds
-  explicit sourcing caveats for BOTH the broth AND the rolled oats (oats
-  face the same cross-contamination risk, which the Architect correctly
-  generalized from the broth example). The caveats appear in the plan's
-  `notes` field — a human-facing sourcing instruction that would appear on
-  the grocery list. Saboteur verifies the mitigations are now documented,
-  calls `approve_plan`, loop exits.
-- **This is exactly the v2 thesis**: the deterministic audit is necessary
-  but insufficient; the LLM-based adversary covers the gaps. Either one
-  alone ships a broken menu; together they ship a safe one.
+  but does more than asked. Rather than narrowly renaming the salad's
+  vinegar, it adds explicit sourcing caveats for BOTH the vinegar AND the
+  rolled oats (oats face the same cross-contamination risk, which the
+  Architect correctly generalized from the vinegar example). The caveats
+  appear in the plan's `notes` field — human-facing sourcing instructions
+  that would land on the grocery list. Saboteur verifies the mitigations
+  are now documented, calls `approve_plan`, loop exits.
+- **This is exactly the v2 thesis, surviving into v3**: the deterministic
+  audit is necessary but insufficient; the LLM-based adversary covers the
+  gaps. Either one alone ships a broken menu; together they ship a safe
+  one.
 
 ---
 
@@ -569,9 +620,10 @@ MENU
 > 4 guests · $80 · **chicken breast** required · equipment = stovetop +
 > sheet pan + mixing bowl · max prep 45 min
 
-Demonstrates: the new `check_equipment` and `validate_prep_time` Critic
-tools running in order; Architect respecting both constraints in a single
-iteration.
+Demonstrates: v3's new operational validators in action. Both
+`check_equipment` and `validate_prep_time` fire in iteration 1, both
+clear, and the Architect respects the 45-minute ceiling on its first
+draft.
 
 ```
 $ python main.py --scenario weeknight --no-images
@@ -584,48 +636,95 @@ $ python main.py --scenario weeknight --no-images
 
 Iteration 1
   architect  → drafted 3 recipes
-  executor   → price_menu_plan(3 recipes, 19 ingredients)
-  executor   ← $24.72 total · 0 unknown · source=simulated
-  executor   → returned priced plan ($24.72)
+  executor   → price_menu_plan(3 recipes, 23 ingredients)
+  executor   ← $30.72 total · 0 unknown · source=simulated
+  executor   → returned priced plan ($30.72)
   critic     → check_equipment(available=[stovetop, sheet pan, mixing bowl])
   critic     ← APPROVED · all equipment available
   critic     → validate_prep_time(max=45 min)
-  critic     ← APPROVED · 45 min total prep
+  critic     ← APPROVED · 42 min total prep
   critic     → APPROVED · "all checks passed"
-  verifier   → audit_menu_plan(19 ingredients, [])
-  verifier   ← APPROVED · 19 ingredients checked · 0 violations
+  verifier   → audit_menu_plan(23 ingredients, [])
+  verifier   ← APPROVED · 23 ingredients checked · 0 violations
   verifier   → APPROVED · 0 violations
   saboteur   → approve_plan — loop exits
   saboteur   ← approved=True
-  saboteur   → CLEAR · "Audited all 19 ingredients across the threat model: no gluten-containing items, no hidden…"
+  saboteur   → CLEAR · "Audited all 23 ingredients against hidden-allergen, cross-contamination, and animal-deriv…"
 
 Chef
   chef       → wrote instructions for 3 recipes
 
 ────────────────────────────────────────────────────────────
- Plan approved in 1 iteration · $24.72 · 45 min prep
+ Plan approved in 1 iteration · $30.72 · 42 min prep
 ────────────────────────────────────────────────────────────
+
+Three-course dinner for 4 within a 45-minute single-cook window (25 + 12 + 5 = 42 min total). Chicken breast (required) is centre-stage: pounded thin, marinated briefly in a mixing bowl with lemon, garlic and herbs, then seared in butter and olive oil on the stovetop for a golden crust and juicy interior. While the chicken rests, couscous is prepared stovetop using warm vegetable broth — the bell peppers and cherry tomatoes are softened in the same pan beforehand for maximum flavour with minimal equipment. The arugula salad needs only a mixing bowl and comes together in minutes. All required equipment (stovetop, mixing bowl) is drawn from the available list; sheet pan is intentionally not required so it remains unused. No dietary restrictions apply. Budget should land well under $80 given commodity pricing on chicken (~$5–7/lb), couscous, and produce.
+
+MENU
+
+• Garlic-Herb Seared Chicken Breast (serves 4 · accommodates: — · 25 min · stovetop, mixing bowl)
+    - 2.0 lb chicken breast       $10.00
+    - 4.0 clove garlic               $1.00
+    - 2.0 count lemon                $1.50
+    - 3.0 tbsp olive oil            $1.50
+    - 0.25 lb butter               $1.25
+    - 0.5 bunch thyme                $1.00
+    - 0.5 bunch rosemary             $1.00
+    - 2.0 tsp sea salt             $0.10
+    - 1.0 tsp black pepper         $0.15
+    Instructions:
+      1. Place the 2 lb chicken breasts between two sheets of plastic wrap or in a zip-lock bag and pound to an even ¾-inch thickness with a meat mallet or heavy skillet.
+      2. Mince all 4 garlic cloves and strip the leaves from the 0.5 bunch of thyme and 0.5 bunch of rosemary.
+      3. In a mixing bowl, combine 2 tbsp of the olive oil, the minced garlic, thyme, rosemary, 1 tsp sea salt, and ½ tsp black pepper, then add the chicken breasts and toss to coat; let marinate at room temperature for 10 minutes.
+      4. Juice 1 lemon into a small bowl and cut the remaining lemon into wedges; set both aside.
+      5. Heat a large skillet over medium-high heat until hot, then add the remaining 1 tbsp olive oil and swirl to coat the pan.
+      6. Lay the marinated chicken breasts flat in the skillet and sear undisturbed for 4 minutes until a deep golden crust forms on the bottom.
+      7. Flip the chicken breasts, add the 0.25 lb butter in small pieces around the chicken, and let it melt and foam.
+      8. Tilt the pan slightly and use a spoon to continuously baste the chicken with the melted butter for 3–4 minutes until the internal temperature reaches 165 °F.
+      9. Pour the reserved lemon juice over the chicken in the pan and swirl briefly to deglaze.
+      10. Transfer the chicken to a cutting board and season with the remaining 1 tsp sea salt and ½ tsp black pepper; let rest for 5 minutes before slicing.
+      11. Slice each breast against the grain and plate with the pan drippings spooned over the top and lemon wedges on the side.
+
+• Herbed Couscous with Roasted Bell Peppers & Cherry Tomatoes (serves 4 · accommodates: vegan, vegetarian · 12 min · stovetop, mixing bowl)
+    - 0.5 lb couscous             $1.50
+    - 2.0 count bell pepper          $3.00
+    - 0.5 lb cherry tomatoes      $1.75
+    - 2.0 tbsp olive oil            $1.00
+    - 0.5 bunch parsley              $0.75
+    - 2.0 cup vegetable broth      $0.40
+    - 1.0 tsp sea salt             $0.05
+    - 0.5 tsp black pepper         $0.07
+
+• Lemon-Arugula Salad with Cherry Tomatoes (serves 4 · accommodates: vegan, vegetarian · 5 min · mixing bowl)
+    - 0.5 lb arugula              $2.00
+    - 0.25 lb cherry tomatoes      $0.88
+    - 1.0 count lemon                $0.75
+    - 2.0 tbsp olive oil            $1.00
+    - 0.5 tsp sea salt             $0.03
+    - 0.25 tsp black pepper         $0.04
+
+(instructions for remaining 2 recipes omitted for brevity — Chef writes them for every dish)
 ```
 
 **What to notice:**
-- The Critic trace now shows the new tools firing in fixed order:
-  `check_equipment` first (clears — every recipe's `required_equipment` is
-  a subset of `[stovetop, sheet pan, mixing bowl]`), then
-  `validate_prep_time` (clears — sum of `prep_minutes` is exactly 45,
-  hitting the ceiling without exceeding it). Budget is checked inline
-  against the grounded plan total without a tool call.
+- **The headline lines are the two new tool calls in the Critic's trace**:
+  `check_equipment(available=[stovetop, sheet pan, mixing bowl])` and
+  `validate_prep_time(max=45 min)`. Both clear in iteration 1 — every
+  recipe's `required_equipment` is a subset of what's available, and the
+  sum of `prep_minutes` is **42 minutes** against the 45-minute ceiling.
+  Budget is checked inline against the grounded plan total without a
+  tool call.
 - The Architect respected both constraints on the first try — no
-  oven-roasted dishes, no blender purées, no slow-braised anything. This
-  is the prompt addition doing its job: the Architect now reads
-  `kitchen_equipment` and `max_prep_minutes` from `user_constraints` and
-  treats them as hard targets, not aspirational.
+  oven-roasted dishes (sheet pan goes unused), no blender purées, no
+  slow-braised anything. This is the prompt addition doing its job: the
+  Architect now reads `kitchen_equipment` and `max_prep_minutes` from
+  `user_constraints` and treats them as hard targets, not aspirational.
+- The receipt summary now reports both cost AND prep time:
+  `Plan approved in 1 iteration · $30.72 · 42 min prep`.
 - The **Chef** stage runs after the loop and writes per-recipe step lists
-  for all three dishes. It runs in its own runner; the loop has already
-  exited by the time Chef takes its first turn.
-- The resulting menu is a 45-minute weeknight dinner: **Pan-Seared Lemon
-  Garlic Chicken Breast** on the stovetop, **Garlic Sautéed Green Beans**
-  alongside, and **Herb White Rice** as the starch — three dishes, no
-  oven, well under budget at $24.72 for four guests.
+  for all three dishes (chicken breast, couscous side, arugula salad). It
+  runs in its own runner; the loop has already exited by the time Chef
+  takes its first turn.
 
 ---
 
@@ -634,18 +733,122 @@ Chef
 > 4 guests · $120 · **salmon** required · nut-allergy · calorie floor
 > 700 kcal/guest · protein floor 40 g/guest
 
-Demonstrates: the `validate_nutrition_macros` Critic tool. Run it yourself
-to see the macro tool fire — this scenario was not captured for the README,
-so there's no canned trace to paste.
+Demonstrates: v3's `validate_nutrition_macros` tool confirming portion
+sizes meet the stated floors. The Critic adds a fourth tool call to its
+sequence; the tool aggregates per-guest macros across every recipe and
+clears comfortably.
 
-What the run will show: the Critic adds a fourth tool call to its sequence
-(`validate_nutrition_macros(guests=4, kcal_floor=700, protein_floor=40g)`)
-and aggregates per-guest calories and protein from `_NUTRITION_DB` across
-every recipe. If the Architect's first draft is salad-and-rice-heavy, the
-tool will reject with a delta hint along the lines of "increase
-protein-dense portions" and the Architect re-plans on the next iteration —
-typically by upping the salmon weight or adding a legume side. The
-nut-allergy restriction stays enforced through the Verifier in parallel.
+```
+$ python main.py --scenario macro_floor
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ AGEP · scenario 'macro_floor' · backend claude-code
+ 4 guests · $120 budget · required: salmon · restrictions: nut-allergy
+ kcal floor: 700/guest · protein floor: 40 g/guest
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Iteration 1
+  architect  → drafted 4 recipes
+  executor   → price_menu_plan(4 recipes, 37 ingredients)
+  executor   ← $64.14 total · 0 unknown · source=simulated
+  executor   → returned priced plan ($64.14)
+  critic     → validate_nutrition_macros(guests=4, kcal_floor=700, protein_floor=40g)
+  critic     ← APPROVED · 1324 kcal/guest · 68.7 g protein/guest
+  critic     → APPROVED · "all checks passed"
+  verifier   → audit_menu_plan(37 ingredients, [nut-allergy])
+  verifier   ← APPROVED · 37 ingredients checked · 0 violations
+  verifier   → APPROVED · 0 violations
+  saboteur   → approve_plan — loop exits
+  saboteur   ← approved=True
+  saboteur   → CLEAR · "Audited all 37 ingredients across 4 recipes against the nut-allergy threat model plus hid…"
+
+Chef
+  chef       → wrote instructions for 4 recipes
+
+────────────────────────────────────────────────────────────
+ Plan approved in 1 iteration · $64.14 · 85 min prep
+────────────────────────────────────────────────────────────
+
+Four-course dinner for 4 guests, strictly nut-free across every dish — no almonds, walnuts, pine nuts, cashew cream, or almond flour appear anywhere. Salmon (2.5 lb total, ~10 oz / guest) satisfies the required_ingredients constraint and delivers an estimated 580 cal and 57 g protein per guest from the fish alone; combined with the quinoa pilaf (~300 cal, 11 g protein), roasted asparagus (~35 cal, 4 g protein), olive oil and butter (~400 cal), and the salad, the full menu lands at approximately 1 350–1 400 cal and 72 g protein per guest — well above the 700 cal and 40 g protein floors. Estimated market cost is ~$65–70, comfortably within the $120 budget. Kitchen equipment assumed: standard home kitchen (oven, stovetop, mixing bowl, sheet pan). The quinoa and asparagus can cook concurrently (oven + stovetop) while the salmon is seared last for best texture; actual wall-clock time for a single cook is roughly 40–45 minutes.
+
+MENU
+
+• Mixed Greens Salad with Lemon-Dijon Vinaigrette (serves 4 · accommodates: nut-free, gluten-free, vegetarian, vegan · 10 min · mixing bowl)
+    - 0.5 lb mixed greens         $2.00
+    - 1.0 count cucumber             $1.00
+    - 0.25 lb cherry tomatoes      $0.88
+    - 1.0 count shallot              $0.80
+    - 3.0 tbsp olive oil            $1.50
+    - 2.0 tbsp vinegar              $0.30
+    - 1.0 tbsp dijon mustard        $0.30
+    - 1.0 count lemon                $0.75
+    - 1.0 tbsp honey                $0.40
+    - 1.0 tsp sea salt             $0.05
+    - 0.5 tsp black pepper         $0.07
+    Instructions:
+      1. Wash and thoroughly dry 0.5 lb mixed greens, then place them in a large mixing bowl.
+      2. Halve the cucumber lengthwise and slice it into half-moons approximately 1/4 inch thick.
+      3. Halve 0.25 lb cherry tomatoes and add them to the bowl with the cucumber slices.
+      4. Peel and mince 1 shallot as finely as possible.
+      5. Juice and zest 1 lemon into a small bowl.
+      6. Add 3 tbsp olive oil, 2 tbsp vinegar, 1 tbsp dijon mustard, 1 tbsp honey, 1 tsp sea salt, and 0.5 tsp black pepper to the lemon juice and zest, then whisk vigorously until fully emulsified.
+      7. Stir the minced shallot into the vinaigrette.
+      8. Add the cucumber and cherry tomatoes to the bowl of greens.
+      9. Drizzle the vinaigrette over the salad just before serving and toss gently until every leaf is lightly coated.
+      10. Divide evenly among 4 plates and serve immediately.
+
+• Pan-Seared Salmon with Lemon-Dill Caper Sauce (serves 4 · accommodates: nut-free, gluten-free · 25 min · stovetop)
+    - 2.5 lb salmon               $30.00
+    - 3.0 tbsp olive oil            $1.50
+    - 0.125 lb butter               $0.62
+    - 4.0 clove garlic               $1.00
+    - 2.0 count lemon                $1.50
+    - 1.0 bunch dill                 $1.80
+    - 2.0 tbsp capers               $0.80
+    - 1.0 tbsp dijon mustard        $0.30
+    - 1.0 tsp sea salt             $0.05
+    - 1.0 tsp black pepper         $0.15
+
+• Garlic Roasted Asparagus with Lemon Zest (serves 4 · accommodates: nut-free, gluten-free, vegetarian, vegan · 20 min · oven, sheet pan)
+    - 1.5 lb asparagus            $6.00
+    - 2.0 tbsp olive oil            $1.00
+    - 3.0 clove garlic               $0.75
+    - 1.0 count lemon                $0.75
+    - 0.5 tsp sea salt             $0.03
+    - 0.5 tsp black pepper         $0.07
+
+• Quinoa Pilaf with Cherry Tomatoes and Fresh Herbs (serves 4 · accommodates: nut-free, gluten-free, vegetarian, vegan · 30 min · stovetop)
+    - 0.75 lb quinoa               $3.00
+    - 2.0 cup vegetable broth      $0.40
+    - 0.5 lb cherry tomatoes      $1.75
+    - 1.0 count onion                $0.75
+    - 2.0 clove garlic               $0.50
+    - 2.0 tbsp olive oil            $1.00
+    - 1.0 bunch parsley              $1.50
+    - 1.0 count lemon                $0.75
+    - 1.0 tsp sea salt             $0.05
+    - 0.5 tsp black pepper         $0.07
+
+(instructions for remaining 3 recipes omitted for brevity — Chef writes them for every dish)
+```
+
+**What to notice:**
+- **The headline line is the macro tool call**:
+  `validate_nutrition_macros(guests=4, kcal_floor=700, protein_floor=40g)`
+  returns `1324 kcal/guest · 68.7 g protein/guest` — comfortably over both
+  floors (about 1.9× the calorie floor and 1.7× the protein floor). The
+  tool aggregates calories and protein from `_NUTRITION_DB` across all
+  four recipes and divides by guest count.
+- The Critic ran the macro tool first and then approved on `"all checks
+  passed"` — no equipment or prep-time tools fire here because this
+  scenario leaves `kitchen_equipment` empty and `max_prep_minutes` unset.
+  Each constraint is opt-in.
+- The Architect's first draft hit the floors without help: 2.5 lb of
+  salmon (~10 oz / guest) supplies most of the protein, and the quinoa
+  pilaf + roasted asparagus + dijon-vinaigrette salad fill out calories
+  while staying strictly nut-free (the Verifier confirms 0 violations
+  against the nut-allergy restriction). Loop exits in one iteration; Chef
+  writes per-recipe steps for all four dishes.
 
 ---
 
