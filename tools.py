@@ -1,20 +1,26 @@
-"""Simulated external APIs and loop-control tools for AGEP.
+"""External API simulations and loop-control tools for AGEP.
 
-Five functions are exposed to the agents:
+Tools exposed to the agents:
 
-1. `search_grocery_price`    (Executor)
-2. `get_nutrition_info`      (Executor)
-3. `check_allergy_conflict`  (Verifier)
-4. `approve_plan`            (Verifier)       — escalates the loop on success
-5. `flag_constraint_conflict` (Critic)        — escalates on impossible input
+* Pricing — ``price_menu_plan`` (Executor). Dispatches to either the bundled
+  simulated grocery DB or the Spoonacular HTTP backend based on ``AGEP_GROCERY``
+  (default ``simulated``; ``spoonacular`` requires ``SPOONACULAR_API_KEY``).
+* Safety audit — ``audit_menu_plan`` (Verifier).
+* Operational validation *(v3)* — ``validate_nutrition_macros``,
+  ``check_equipment``, ``validate_prep_time`` (all Critic). Each returns a
+  structured pass/fail with concrete delta hints on rejection.
+* Loop control — ``approve_plan`` (Saboteur), ``flag_constraint_conflict``
+  (Critic).
 
-The price and nutrition databases are small, deliberate dicts. Fillers like
-`almond flour` and `cashew cream` are marked with `allergens=["nuts"]` so the
-hallucination-prevention loop has real gotchas to catch.
+The bundled price and nutrition databases are small, deliberate dicts.
+Fillers like ``almond flour`` and ``cashew cream`` are marked with
+``allergens=["nuts"]`` so the hallucination-prevention loop has real
+gotchas to catch.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from google.adk.tools import ToolContext
@@ -257,9 +263,112 @@ _GLOBAL_EXCLUSIONS: set[str] = {
 _PER_GUEST_PREFERENCES: set[str] = {"vegan", "vegetarian"}
 
 
+# ---------------------------------------------------------------------------
+# v3 — macro nutrition (per 100g) for the heavy hitters. Used by the Critic's
+# validate_nutrition_macros tool. Deliberately limited to high-impact foods
+# (proteins, grains, legumes, dairy, eggs, nuts, oils) — herbs, spices, and
+# aromatics contribute negligible calories at recipe-scale quantities and are
+# omitted to keep the heuristic from overweighting trace ingredients.
+# ---------------------------------------------------------------------------
+
+_MACRO_PER_100G: dict[str, dict[str, float]] = {
+    # Proteins
+    "salmon":            {"kcal": 208, "protein_g": 20},
+    "cod":               {"kcal": 105, "protein_g": 23},
+    "shrimp":            {"kcal":  99, "protein_g": 24},
+    "chicken breast":    {"kcal": 165, "protein_g": 31},
+    "ground beef":       {"kcal": 250, "protein_g": 26},
+    "tofu":              {"kcal":  76, "protein_g":  8},
+    "tempeh":            {"kcal": 193, "protein_g": 19},
+    "seitan":            {"kcal": 370, "protein_g": 75},
+    # Grains / legumes (raw, dry-weight values where applicable)
+    "quinoa":            {"kcal": 368, "protein_g": 14},
+    "brown rice":        {"kcal": 367, "protein_g":  7},
+    "white rice":        {"kcal": 365, "protein_g":  7},
+    "couscous":          {"kcal": 376, "protein_g": 13},
+    "farro":             {"kcal": 340, "protein_g": 13},
+    "pasta":             {"kcal": 371, "protein_g": 13},
+    "rolled oats":       {"kcal": 389, "protein_g": 17},
+    "lentils":           {"kcal": 353, "protein_g": 25},
+    "chickpeas":         {"kcal": 364, "protein_g": 19},
+    "black beans":       {"kcal": 339, "protein_g": 22},
+    "white beans":       {"kcal": 333, "protein_g": 23},
+    "kidney beans":      {"kcal": 333, "protein_g": 24},
+    # Oils & high-cal condiments
+    "olive oil":         {"kcal": 884, "protein_g":  0},
+    "coconut oil":       {"kcal": 862, "protein_g":  0},
+    "sesame oil":        {"kcal": 884, "protein_g":  0},
+    "honey":             {"kcal": 304, "protein_g":  0},
+    "maple syrup":       {"kcal": 260, "protein_g":  0},
+    "tahini":            {"kcal": 595, "protein_g": 17},
+    # Dairy / eggs
+    "butter":            {"kcal": 717, "protein_g":  1},
+    "milk":              {"kcal":  42, "protein_g":  3},
+    "yogurt":            {"kcal":  59, "protein_g": 10},
+    "eggs":              {"kcal": 155, "protein_g": 13},
+    "parmesan":          {"kcal": 431, "protein_g": 38},
+    "feta":              {"kcal": 264, "protein_g": 14},
+    "cheddar":           {"kcal": 403, "protein_g": 25},
+    # Nuts
+    "pine nuts":         {"kcal": 673, "protein_g": 14},
+    "almond flour":      {"kcal": 640, "protein_g": 21},
+    "cashew cream":      {"kcal": 350, "protein_g":  8},
+    "walnuts":           {"kcal": 654, "protein_g": 15},
+    "almonds":           {"kcal": 579, "protein_g": 21},
+    # Pantry staples
+    "coconut milk":      {"kcal": 230, "protein_g":  2},
+    "chickpea flour":    {"kcal": 387, "protein_g": 22},
+    "avocado":           {"kcal": 160, "protein_g":  2},
+    "potato":            {"kcal":  77, "protein_g":  2},
+    "sweet potato":      {"kcal":  86, "protein_g":  2},
+    "corn":              {"kcal":  96, "protein_g":  3},
+}
+
+# Approximate grams per "1 unit" of the canonical pricing unit. Coarse but
+# defensible at recipe scale — within ~20 % of USDA reference portions for
+# everything in _MACRO_PER_100G. Anything not in this map (counts of lemons,
+# bunches of herbs, etc.) is skipped by the macro validator.
+_GRAMS_PER_PRICING_UNIT: dict[str, float] = {
+    "lb":     453.592,
+    "tbsp":    14.0,    # liquid avg
+    "tsp":      5.0,
+    "cup":    240.0,    # liquid avg
+    "can":    400.0,    # 14 oz coconut milk can
+    "quart":  946.0,
+    "gallon": 3785.0,
+    # Per-count items where the macro DB has a value (avocado mostly)
+    "count":  150.0,    # generic produce piece — wide variance, used loosely
+}
+
+
 def _lookup_key(ingredient: str) -> str:
     """Case-insensitive, trimmed key for the in-memory databases."""
     return ingredient.strip().lower()
+
+
+def _ingredient_macros(name: str, qty: float, unit: str) -> dict[str, float] | None:
+    """Return ``{"kcal": float, "protein_g": float}`` for a recipe-line
+    ingredient, or ``None`` if it isn't in the macro DB or has an
+    incomputable unit (herbs, spices, aromatics — intentional skip).
+    """
+    macros = _MACRO_PER_100G.get(_lookup_key(name))
+    if macros is None:
+        return None
+    # Convert the quantity to canonical pricing-unit, then to grams.
+    row = _GROCERY_PRICES_USD.get(_lookup_key(name))
+    if row is None:
+        return None
+    canonical_qty = _convert_quantity(float(qty), unit, row["unit"])
+    if canonical_qty is None:
+        return None
+    grams_per = _GRAMS_PER_PRICING_UNIT.get(row["unit"])
+    if grams_per is None:
+        return None
+    grams = canonical_qty * grams_per
+    return {
+        "kcal": (grams / 100.0) * macros["kcal"],
+        "protein_g": (grams / 100.0) * macros["protein_g"],
+    }
 
 
 # Conversion factors from the given unit to the canonical unit family.
@@ -488,21 +597,8 @@ def check_allergy_conflict(
     }
 
 
-def price_menu_plan(plan_json: str) -> dict[str, Any]:
-    """Price every ingredient in a menu plan in a single call.
-
-    The Executor should prefer this batch tool over many `search_grocery_price`
-    calls — one invocation fills in the entire grounded plan.
-
-    Args:
-        plan_json: JSON string of a MenuPlan (recipes[], total_cost_usd, notes).
-
-    Returns:
-        {"grounded_plan": <MenuPlan-shaped dict with all estimated_cost_usd
-                            populated and total_cost_usd recomputed>,
-         "unknown_ingredients": [list of ingredient names not in the DB],
-         "source": "simulated"}
-    """
+def _price_menu_plan_simulated(plan_json: str) -> dict[str, Any]:
+    """Bundled grocery DB pricing — pure-Python, zero-config, no network."""
     import json
 
     try:
@@ -533,6 +629,256 @@ def price_menu_plan(plan_json: str) -> dict[str, Any]:
         "grounded_plan": plan,
         "unknown_ingredients": unknown,
         "source": "simulated",
+    }
+
+
+def price_menu_plan(plan_json: str) -> dict[str, Any]:
+    """Price every ingredient in a menu plan in a single call.
+
+    Dispatches to one of two grocery backends based on env:
+
+    * ``AGEP_GROCERY=simulated`` *(default)* — uses the bundled in-memory
+      price DB. Zero config, zero network, deterministic.
+    * ``AGEP_GROCERY=spoonacular`` — uses the live Spoonacular HTTP API.
+      Requires ``SPOONACULAR_API_KEY``. Free tier is 150 requests/day, so
+      the adapter caches responses by ``(name, unit)``.
+
+    The Executor should prefer this batch tool over many
+    ``search_grocery_price`` calls — one invocation fills in the entire
+    grounded plan.
+
+    Args:
+        plan_json: JSON string of a MenuPlan (recipes[], total_cost_usd, notes).
+
+    Returns:
+        {"grounded_plan": <MenuPlan dict with all estimated_cost_usd populated
+                            and total_cost_usd recomputed>,
+         "unknown_ingredients": [list of ingredient names without a price],
+         "source": "simulated" | "spoonacular"}
+    """
+    backend = os.getenv("AGEP_GROCERY", "simulated").strip().lower()
+    if backend == "spoonacular":
+        try:
+            from tools_spoonacular import price_menu_plan_spoonacular
+        except ImportError as e:
+            return {
+                "error": f"Spoonacular backend unavailable: {e}. "
+                "Install 'requests' and ensure tools_spoonacular.py is importable."
+            }
+        return price_menu_plan_spoonacular(plan_json)
+    return _price_menu_plan_simulated(plan_json)
+
+
+# ---------------------------------------------------------------------------
+# v3 — operational validation tools (Critic)
+# ---------------------------------------------------------------------------
+
+
+def validate_nutrition_macros(
+    plan_json: str,
+    guests: int,
+    calorie_floor_per_guest: int = 0,
+    protein_floor_per_guest_g: int = 0,
+) -> dict[str, Any]:
+    """Sum calories + protein across the menu and check per-guest floors.
+
+    Coarse-but-defensible: aggregates only the heavy-hitter ingredients in
+    ``_MACRO_PER_100G`` (proteins, grains, legumes, dairy, eggs, nuts, oils).
+    Trace ingredients (herbs, spices, lemons, garlic) are skipped — they
+    contribute negligible macros at recipe-scale quantities.
+
+    Args:
+        plan_json: JSON string of a (priced or unpriced) MenuPlan.
+        guests: Number of diners — used to compute per-guest yields.
+        calorie_floor_per_guest: Minimum kcal/guest. ``0`` disables this check.
+        protein_floor_per_guest_g: Minimum protein g/guest. ``0`` disables.
+
+    Returns:
+        {"status": "approved" | "rejected",
+         "calories_per_guest": float,
+         "protein_g_per_guest": float,
+         "violations": [str],
+         "audited_ingredients": int}
+    """
+    import json
+
+    try:
+        plan = json.loads(plan_json) if isinstance(plan_json, str) else plan_json
+    except json.JSONDecodeError as e:
+        return {
+            "status": "rejected",
+            "violations": [f"plan_json is not valid JSON: {e}"],
+            "calories_per_guest": 0.0,
+            "protein_g_per_guest": 0.0,
+            "audited_ingredients": 0,
+        }
+    if guests <= 0:
+        return {
+            "status": "rejected",
+            "violations": ["guests must be >= 1"],
+            "calories_per_guest": 0.0,
+            "protein_g_per_guest": 0.0,
+            "audited_ingredients": 0,
+        }
+
+    recipes = plan.get("recipes", []) if isinstance(plan, dict) else []
+    total_kcal = 0.0
+    total_protein = 0.0
+    audited = 0
+    for recipe in recipes:
+        for ing in recipe.get("ingredients", []):
+            macros = _ingredient_macros(
+                ing.get("name", ""),
+                float(ing.get("quantity", 0) or 0),
+                ing.get("unit", ""),
+            )
+            if macros is None:
+                continue
+            audited += 1
+            total_kcal += macros["kcal"]
+            total_protein += macros["protein_g"]
+
+    kcal_per_guest = total_kcal / guests
+    protein_per_guest = total_protein / guests
+
+    violations: list[str] = []
+    if calorie_floor_per_guest > 0 and kcal_per_guest < calorie_floor_per_guest:
+        deficit = calorie_floor_per_guest - kcal_per_guest
+        violations.append(
+            f"Menu provides {kcal_per_guest:.0f} kcal/guest; "
+            f"floor is {calorie_floor_per_guest} kcal/guest "
+            f"(short by {deficit:.0f} kcal/guest)."
+        )
+    if protein_floor_per_guest_g > 0 and protein_per_guest < protein_floor_per_guest_g:
+        deficit = protein_floor_per_guest_g - protein_per_guest
+        violations.append(
+            f"Menu provides {protein_per_guest:.1f} g protein/guest; "
+            f"floor is {protein_floor_per_guest_g} g/guest "
+            f"(short by {deficit:.1f} g/guest)."
+        )
+
+    return {
+        "status": "approved" if not violations else "rejected",
+        "calories_per_guest": round(kcal_per_guest, 1),
+        "protein_g_per_guest": round(protein_per_guest, 1),
+        "violations": violations,
+        "audited_ingredients": audited,
+    }
+
+
+def check_equipment(
+    plan_json: str, available_equipment: list[str]
+) -> dict[str, Any]:
+    """Ensure every recipe's required equipment is in the available list.
+
+    Empty ``available_equipment`` means *unconstrained* — the user has not
+    declared a kitchen profile, so any recipe equipment is acceptable.
+
+    Args:
+        plan_json: JSON string of a MenuPlan.
+        available_equipment: Equipment the user has, e.g. ``["oven","stovetop"]``.
+
+    Returns:
+        {"status": "approved" | "rejected",
+         "violations": [str],
+         "missing_equipment": [str]}
+    """
+    import json
+
+    try:
+        plan = json.loads(plan_json) if isinstance(plan_json, str) else plan_json
+    except json.JSONDecodeError as e:
+        return {
+            "status": "rejected",
+            "violations": [f"plan_json is not valid JSON: {e}"],
+            "missing_equipment": [],
+        }
+    if not available_equipment:
+        return {"status": "approved", "violations": [], "missing_equipment": []}
+
+    available = {e.strip().lower() for e in available_equipment}
+    recipes = plan.get("recipes", []) if isinstance(plan, dict) else []
+    violations: list[str] = []
+    missing_set: set[str] = set()
+    for recipe in recipes:
+        name = recipe.get("name", "<unnamed>")
+        for eq in recipe.get("required_equipment", []) or []:
+            key = eq.strip().lower()
+            if key and key not in available:
+                violations.append(
+                    f"'{name}' requires '{eq}' but only "
+                    f"{sorted(available)} is available."
+                )
+                missing_set.add(eq)
+    return {
+        "status": "approved" if not violations else "rejected",
+        "violations": violations,
+        "missing_equipment": sorted(missing_set),
+    }
+
+
+def validate_prep_time(
+    plan_json: str, max_prep_minutes: int = 0
+) -> dict[str, Any]:
+    """Sum the menu's prep_minutes and check against a wall-clock ceiling.
+
+    The sum assumes a single cook (no sous chef) — recipes with overlapping
+    oven/stove time are not parallelized in this estimate, which is the
+    correct conservative default for a one-person kitchen.
+
+    Args:
+        plan_json: JSON string of a MenuPlan.
+        max_prep_minutes: Total wall-clock ceiling. ``0`` disables this check.
+
+    Returns:
+        {"status": "approved" | "rejected",
+         "total_prep_minutes": int,
+         "violations": [str],
+         "missing_estimates": [recipe names without prep_minutes]}
+    """
+    import json
+
+    try:
+        plan = json.loads(plan_json) if isinstance(plan_json, str) else plan_json
+    except json.JSONDecodeError as e:
+        return {
+            "status": "rejected",
+            "violations": [f"plan_json is not valid JSON: {e}"],
+            "total_prep_minutes": 0,
+            "missing_estimates": [],
+        }
+
+    recipes = plan.get("recipes", []) if isinstance(plan, dict) else []
+    total = 0
+    missing: list[str] = []
+    for recipe in recipes:
+        pm = recipe.get("prep_minutes")
+        if pm is None:
+            missing.append(recipe.get("name", "<unnamed>"))
+            continue
+        try:
+            total += int(pm)
+        except (TypeError, ValueError):
+            missing.append(recipe.get("name", "<unnamed>"))
+
+    violations: list[str] = []
+    if max_prep_minutes > 0:
+        if missing:
+            violations.append(
+                f"Cannot validate prep time: {len(missing)} recipe(s) "
+                f"missing prep_minutes — {missing}."
+            )
+        elif total > max_prep_minutes:
+            violations.append(
+                f"Menu requires {total} min total prep but ceiling is "
+                f"{max_prep_minutes} min (over by {total - max_prep_minutes} min)."
+            )
+
+    return {
+        "status": "approved" if not violations else "rejected",
+        "total_prep_minutes": total,
+        "violations": violations,
+        "missing_estimates": missing,
     }
 
 

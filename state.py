@@ -24,6 +24,24 @@ class EventConstraints(BaseModel):
         default_factory=list,
         description="Tags like 'vegan', 'nut-allergy', 'gluten-free'.",
     )
+    # v3 additions — operational constraints for "actually cookable" plans.
+    kitchen_equipment: list[str] = Field(
+        default_factory=list,
+        description="Equipment available, e.g. ['oven','stovetop','blender']. "
+        "Empty = unconstrained (Architect may assume a typical kitchen).",
+    )
+    max_prep_minutes: Optional[int] = Field(
+        default=None, ge=1,
+        description="Total wall-clock prep + cook ceiling across the menu.",
+    )
+    calorie_floor_per_guest: Optional[int] = Field(
+        default=None, ge=1,
+        description="Minimum calories per guest across the full menu.",
+    )
+    protein_floor_per_guest_g: Optional[int] = Field(
+        default=None, ge=0,
+        description="Minimum protein grams per guest across the full menu.",
+    )
 
 
 class Ingredient(BaseModel):
@@ -44,6 +62,15 @@ class Recipe(BaseModel):
     accommodates: list[str] = Field(
         default_factory=list,
         description="Which dietary tags this dish satisfies.",
+    )
+    # v3 additions — operational metadata used by the Critic and Chef.
+    prep_minutes: Optional[int] = Field(
+        default=None, ge=0,
+        description="Wall-clock prep + cook minutes for this dish.",
+    )
+    required_equipment: list[str] = Field(
+        default_factory=list,
+        description="Equipment the recipe needs, e.g. ['oven','blender'].",
     )
 
 
@@ -103,3 +130,29 @@ class SaboteurReport(BaseModel):
         default="",
         description="Free-form notes on what the Saboteur audited (only on no_loophole_found).",
     )
+
+
+# ---------------------------------------------------------------------------
+# v3 additions — Chef output
+# ---------------------------------------------------------------------------
+
+
+class RecipeInstructions(BaseModel):
+    """Step-by-step cooking instructions for one approved recipe."""
+
+    recipe_name: str
+    steps: list[str] = Field(
+        description="Ordered, atomic cooking steps. Each step is a single "
+        "imperative sentence a cook can follow without ambiguity."
+    )
+
+
+class CookingScript(BaseModel):
+    """Full cooking-instructions bundle, one entry per recipe in the menu.
+
+    Produced by the Chef agent AFTER the safety loop has approved the plan.
+    Lives outside the safety loop so a malformed Chef output cannot block
+    or invalidate an approved menu.
+    """
+
+    recipes: list[RecipeInstructions]

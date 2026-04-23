@@ -1,22 +1,32 @@
-"""Agent definitions for AGEP v2.
+"""Agent definitions for AGEP v3.
 
-Five specialized :class:`LlmAgent`s plus the outer :class:`LoopAgent`:
+Five specialized :class:`LlmAgent`s inside the safety loop, plus a sixth
+:class:`LlmAgent` (Chef) that runs *after* the loop on the approved plan.
 
-* Architect (temp 0.7) — strategic decomposition into a JSON menu plan
-* Executor  (temp 0.1) — tool-grounded pricing of the plan
-* Critic    (temp 0.0) — budget & macro validation; emits delta instructions
+Inside the loop (max 5 iterations):
+
+* Architect (temp 0.7) — strategic decomposition into a JSON menu plan.
+* Executor  (temp 0.1) — tool-grounded pricing of the plan.
+* Critic    (temp 0.0) — budget, macros, equipment, and prep-time validation.
+                         Emits delta instructions on rejection.
 * Verifier  (temp 0.0) — deterministic ingredient audit against the
-                         restriction tool's known categories
+                         restriction tool's known categories.
 * Saboteur  (temp 0.7) — red-team adversary; finds loopholes the Verifier's
-                         tool cannot see (cross-contamination, out-of-tool
-                         restrictions, hidden animal products). Owns
-                         ``approve_plan`` — the only agent that can
-                         terminate the loop. Verifier and Saboteur must
-                         both clear before approval — "consensus safety".
+                         tool cannot see. Owns ``approve_plan`` — the only
+                         agent that can terminate the loop. Verifier and
+                         Saboteur must both clear before approval —
+                         "consensus safety".
 
-The loop runs at most 5 iterations. Inter-agent communication is via
-``session.state`` — each agent declares an ``output_key`` and reads prior
-outputs via ``{placeholder}`` substitution in its instruction.
+After the loop succeeds:
+
+* Chef      (temp 0.2) — turns the approved plan into step-by-step cooking
+                         instructions. Runs in its own runner so a malformed
+                         Chef output cannot retroactively invalidate an
+                         already-approved menu.
+
+Inter-loop communication is via ``session.state``. Each agent declares an
+``output_key``; the next agent reads prior outputs via ``{placeholder}``
+substitution in its instruction.
 """
 
 from __future__ import annotations
@@ -28,9 +38,12 @@ from llm import get_model
 from tools import (
     approve_plan,
     audit_menu_plan,
+    check_equipment,
     flag_constraint_conflict,
     pantry_with_units,
     price_menu_plan,
+    validate_nutrition_macros,
+    validate_prep_time,
 )
 
 _PANTRY_LINE = ", ".join(pantry_with_units())
@@ -64,6 +77,19 @@ Semantics of dietary restrictions (important):
 - Preferences like 'vegan' or 'vegetarian' are PER-GUEST: at LEAST ONE dish
   must be fully compliant; the other dishes may freely be non-compliant.
 
+v3 operational constraints (only enforced when non-empty / non-null):
+- kitchen_equipment: list of equipment available. Every recipe's
+  required_equipment list must be a SUBSET of this list. Common values:
+  'oven', 'stovetop', 'blender', 'food processor', 'grill', 'microwave',
+  'instant pot', 'slow cooker', 'sheet pan', 'mixing bowl'. Always include
+  'mixing bowl' as needed since most recipes need one. If kitchen_equipment
+  is empty, assume a typical home kitchen (oven, stovetop, mixing bowl).
+- max_prep_minutes: total wall-clock prep+cook ceiling across the menu,
+  assuming a single cook (no parallelism). Sum of all prep_minutes must
+  not exceed this.
+- calorie_floor_per_guest / protein_floor_per_guest_g: minimum macros per
+  guest across the entire menu. The Critic enforces these via tool.
+
 Rules:
 1. Honour every entry in required_ingredients — they must appear in at least
    one recipe.
@@ -83,6 +109,9 @@ Rules:
    common unit aliases (lb/lbs/pound, oz, g, kg, tbsp, tsp, cup, ml, count,
    clove, bunch, can) — the pricing system converts between compatible units.
    Do NOT mix incompatible units (e.g. 'kg' for an ingredient priced per 'count').
+9. EVERY recipe MUST include realistic ``prep_minutes`` (integer wall-clock
+   minutes for a single cook) AND a ``required_equipment`` list. These are
+   used by Critic tools and the post-loop Chef.
 
 Available pantry — "name (priced per unit)":
 {_PANTRY_LINE}
@@ -93,6 +122,8 @@ Respond with ONLY a JSON object matching this schema, no prose, no fences:
     {{{{
       "name": "string",
       "serves": integer,
+      "prep_minutes": integer,
+      "required_equipment": ["oven", "stovetop", ...],
       "ingredients": [
         {{{{"name": "string from pantry", "quantity": number, "unit": "string", "estimated_cost_usd": null}}}}
       ],
@@ -119,7 +150,10 @@ Your job (EXACTLY two steps):
 1. Call `price_menu_plan` with plan_json set to the current_plan's JSON. This
    prices every ingredient in one shot and returns a `grounded_plan` field.
 2. Then respond with ONLY the grounded_plan JSON (recipes[], total_cost_usd,
-   notes), verbatim from the tool result. Do NOT wrap it in fences or prose.
+   notes), verbatim from the tool result. Preserve every field on each recipe
+   exactly as the Architect wrote it (prep_minutes, required_equipment,
+   accommodates) — only the per-ingredient estimated_cost_usd and the top-level
+   total_cost_usd should change. Do NOT wrap the JSON in fences or prose.
    If the tool flagged unknown_ingredients, mention them in the plan's notes
    field but keep their estimated_cost_usd as null.
 
@@ -129,26 +163,46 @@ function, then your JSON-only response.
 
 
 CRITIC_PROMPT = """\
-You are the Critic — zero-tolerance budget & macro validator.
+You are the Critic — zero-tolerance budget, macro, equipment, and prep-time
+validator.
 
 Inputs:
 - grounded_plan: {grounded_plan}
 - user_constraints: {user_constraints}
 
-Your job:
-1. Compute total_cost_usd from the grounded_plan. If it exceeds
-   user_constraints.budget_usd, the plan is REJECTED.
-2. Sanity-check portion sizes: every guest should get at least ~400 kcal of
-   food (rough heuristic). If protein/calorie content is obviously too low,
-   REJECT.
-3. If you believe the constraints are MATHEMATICALLY IMPOSSIBLE (e.g. even
-   the cheapest reasonable menu would exceed the budget), call the tool
+Validation order (run EACH applicable tool exactly once, in order):
+
+1. **Budget.** Compute total_cost_usd from the grounded_plan. If it exceeds
+   user_constraints.budget_usd, the plan is REJECTED with a budget delta.
+
+2. **Macros.** If user_constraints.calorie_floor_per_guest OR
+   protein_floor_per_guest_g is non-null/non-zero, call
+   `validate_nutrition_macros` with plan_json=grounded_plan JSON,
+   guests=user_constraints.guests, and the two floors. Aggregate any
+   violations into your delta_instructions.
+
+3. **Equipment.** If user_constraints.kitchen_equipment is non-empty, call
+   `check_equipment` with plan_json=grounded_plan JSON and
+   available_equipment=user_constraints.kitchen_equipment. Aggregate any
+   violations into your delta_instructions (e.g. "Replace blender step in
+   X with a hand-mash technique").
+
+4. **Prep time.** If user_constraints.max_prep_minutes is non-null/non-zero,
+   call `validate_prep_time` with plan_json=grounded_plan JSON and
+   max_prep_minutes=user_constraints.max_prep_minutes. Aggregate any
+   violations into your delta_instructions (e.g. "Drop the slow-roasted
+   dish; replace with sheet-pan version under 25 min").
+
+5. **Sanity.** If you believe the constraints are MATHEMATICALLY IMPOSSIBLE
+   (e.g. even the cheapest reasonable menu would exceed the budget; or the
+   prep-time ceiling can't fit even one substantial dish), call the function
    `flag_constraint_conflict` with a clear reason. The loop will abort.
-4. Otherwise emit a JSON Critique:
-   - status: "approved" if the plan is within budget and sensible, else "rejected"
-   - reason: one-sentence summary
-   - delta_instructions: concrete changes (e.g. "Swap salmon for cod to save
-     $30", "Reduce quinoa from 3 lb to 2 lb"). Empty list if approved.
+
+6. Emit a JSON Critique consolidating ALL findings:
+   - status: "approved" only if every applicable check passed; else "rejected"
+   - reason: one-sentence summary of what failed (or "all checks passed")
+   - delta_instructions: concrete changes the Architect can apply on the next
+     iteration. Empty list if approved.
 
 Respond with ONLY a JSON object in this shape, no prose, no fences:
 {{"status": "approved|rejected", "reason": "...", "delta_instructions": [...]}}
@@ -215,10 +269,10 @@ Threat model — gaps the Verifier's tool CANNOT see:
    gluten-free oats"), ACCEPT that mitigation and do not re-flag it.
 
 Process:
-1. If critique.status == "rejected", the plan is already failing on budget.
-   Emit:
+1. If critique.status == "rejected", the plan is already failing on budget,
+   macros, equipment, or prep time. Emit:
      {{"status": "loophole_found",
-       "attack": "plan exceeds budget; Critic rejected",
+       "attack": "plan rejected by Critic",
        "evidence": "critique.status=rejected",
        "proposed_fix": "apply Critic's delta_instructions"}}
    and stop — do NOT call approve_plan.
@@ -247,13 +301,42 @@ common-enough-to-matter failure modes.
 """
 
 
+CHEF_PROMPT = """\
+You are the Chef — you run AFTER the safety loop has approved the menu.
+Your output is purely additive (cooking instructions); it cannot
+retroactively reject or alter the approved plan.
+
+Input:
+- grounded_plan: {grounded_plan}
+
+Your job: for EVERY recipe in grounded_plan.recipes, write step-by-step
+cooking instructions a competent home cook can follow without ambiguity.
+
+Each step must be ONE atomic imperative sentence. Be specific:
+- Include temperatures (e.g. "Preheat oven to 400 F").
+- Include timing (e.g. "Sear 4 minutes per side").
+- Reference ingredient quantities from the recipe when relevant.
+- Cover the entire workflow: mise en place, cooking, plating.
+
+Aim for 6-12 steps per recipe. Do NOT add extra ingredients beyond what is
+in the recipe. Do NOT change the recipe — only document how to cook it.
+
+Respond with ONLY a JSON object in this shape, no prose, no fences:
+{{"recipes": [
+  {{"recipe_name": "<exact name from the plan>",
+    "steps": ["step 1", "step 2", "step 3", ...]}},
+  ...
+]}}
+"""
+
+
 # ---------------------------------------------------------------------------
 # Agents
 # ---------------------------------------------------------------------------
 
 
 def build_agents() -> tuple[LlmAgent, LlmAgent, LlmAgent, LlmAgent, LlmAgent]:
-    """Construct the five agents.
+    """Construct the five in-loop agents.
 
     Packaged in a function so the model backend (which reads env vars) is
     resolved at call time, not at import time — this lets tests and CLIs
@@ -282,9 +365,14 @@ def build_agents() -> tuple[LlmAgent, LlmAgent, LlmAgent, LlmAgent, LlmAgent]:
         name="critic",
         model=get_model(0.0),
         generate_content_config=_cfg(0.0),
-        description="Validates budget & macros; emits delta instructions on rejection.",
+        description="Validates budget, macros, equipment, and prep-time; emits delta instructions on rejection.",
         instruction=CRITIC_PROMPT,
-        tools=[flag_constraint_conflict],
+        tools=[
+            validate_nutrition_macros,
+            check_equipment,
+            validate_prep_time,
+            flag_constraint_conflict,
+        ],
         output_key="critique",
     )
 
@@ -322,4 +410,16 @@ def build_loop() -> LoopAgent:
         ),
         sub_agents=[architect, executor, critic, verifier, saboteur],
         max_iterations=MAX_ITERATIONS,
+    )
+
+
+def build_chef() -> LlmAgent:
+    """Construct the Chef agent — runs once on the approved plan, no tools."""
+    return LlmAgent(
+        name="chef",
+        model=get_model(0.2),
+        generate_content_config=_cfg(0.2),
+        description="Writes step-by-step cooking instructions for the approved menu.",
+        instruction=CHEF_PROMPT,
+        output_key="cooking_script",
     )

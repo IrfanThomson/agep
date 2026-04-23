@@ -1,22 +1,27 @@
-# AGEP v2 — Autonomous Gourmet Event Planner with Adversarial Consensus
+# AGEP v3 — Autonomous Gourmet Event Planner with Cookable Output
 
-A **five-agent** Plan-Act-Reflect-RedTeam system on [Google Agent Development
-Kit][adk] that plans a dinner event end-to-end. v2 extends v1 with a
-**Saboteur** — a red-team adversary that runs after the Verifier and
-specifically hunts for loopholes the deterministic safety audit cannot see
-(cross-contamination risk, restrictions outside the tool's categories,
-hidden animal products). The plan is only approved when **both** the
-rule-based Verifier and the LLM-based Saboteur clear it — *consensus safety*.
+A **six-agent** Plan-Act-Reflect-RedTeam-then-Cook system on [Google Agent
+Development Kit][adk] that turns a dinner-party request into a printable
+booklet: a priced menu, step-by-step cooking instructions, and (optionally)
+AI-generated dish photography. v3 takes the v2 safety pipeline — Architect,
+Executor, Critic, Verifier, Saboteur — and bolts on a post-loop **Chef**
+stage plus operational constraints (kitchen equipment, prep-time ceiling,
+calorie / protein floors), so the approved plan is something you can actually
+walk into the kitchen and execute.
 
 The default backend is **Claude Code headless** — no API key needed to run
-locally. Swap to Gemini or Anthropic with a single env var.
+locally. The default grocery backend is the same in-process simulator from
+v1/v2, with **Spoonacular** available as a one-env-var swap. Dish image
+generation is opt-in and falls back silently when not configured.
 
-> **Relationship to v1.** Everything from v1 still works — same Architect,
-> Executor, and Critic, same `audit_menu_plan` tool, same three scenarios.
-> The only structural change is that `approve_plan` has moved from the
-> Verifier to the new Saboteur, so the loop now requires two independent
-> safety votes instead of one. The original `main` branch, now renamed
-> [`v1`](https://github.com/IrfanThomson/agep/tree/v1), is preserved for
+> **Relationship to v2.** v3 is strictly additive on the safety side.
+> Same five-agent loop, same `LoopAgent(max_iterations=5)`, same
+> `approve_plan` gate, same Adversarial Consensus rule. The Critic gained
+> three new validation tools (equipment, prep time, macros), the Architect's
+> prompt knows how to respect them, and a sixth agent (Chef) now runs in
+> its **own runner** after the loop terminates. v1 and v2 are preserved as
+> the [`v1`](https://github.com/IrfanThomson/agep/tree/v1) and
+> [`v2`](https://github.com/IrfanThomson/agep/tree/v2) branches for direct
 > comparison.
 
 [adk]: https://google.github.io/adk-docs/
@@ -46,87 +51,166 @@ flowchart LR
     approve --> result([Approved MenuPlan])
 ```
 
-**The five agents:**
+After the loop terminates with an approved plan, control passes to a second,
+independent runner:
 
-| Agent         | Temp | Tools                              | What it does                                                                          |
-|---------------|:----:|------------------------------------|---------------------------------------------------------------------------------------|
-| **Architect** | 0.7  | *(none)*                           | Decomposes user intent into a JSON menu plan. Creative; may need corrections.         |
-| **Executor**  | 0.1  | `price_menu_plan`                  | Batch-prices every ingredient against a simulated grocery API.                        |
-| **Critic**    | 0.0  | `flag_constraint_conflict`         | Validates budget + macros. Emits concrete delta-instructions on rejection.            |
-| **Verifier**  | 0.0  | `audit_menu_plan`                  | Deterministic ingredient audit against the tool's known restriction categories.       |
-| **Saboteur**  | 0.7  | `approve_plan`                     | Red-team adversary; hunts loopholes the Verifier's tool can't see. Gates approval.    |
+```mermaid
+flowchart LR
+    approved([Approved MenuPlan]) --> chef_runner
+
+    subgraph chef_runner ["InMemoryRunner · own session"]
+        chef[Chef<br/>temp 0.2]
+    end
+
+    chef --> script([CookingScript])
+    approved -. recipes .-> images{{Image gen<br/>optional}}
+    images -- GOOGLE_API_KEY set --> pngs([PNGs in generated/])
+    images -- not configured --> skip([no-op, skipped])
+    script --> booklet([Printed booklet:<br/>menu + prices +<br/>instructions + images])
+    pngs --> booklet
+    skip --> booklet
+```
+
+**The six agents:**
+
+| Agent         | Temp | Stage     | Tools                                                            | What it does                                                                          |
+|---------------|:----:|-----------|------------------------------------------------------------------|---------------------------------------------------------------------------------------|
+| **Architect** | 0.7  | in-loop   | *(none)*                                                         | Decomposes user intent into a JSON menu plan with `prep_minutes` + `required_equipment` per recipe. |
+| **Executor**  | 0.1  | in-loop   | `price_menu_plan`                                                | Batch-prices every ingredient. Backend is simulated by default, Spoonacular if `AGEP_GROCERY=spoonacular`. |
+| **Critic**    | 0.0  | in-loop   | `validate_nutrition_macros`, `check_equipment`, `validate_prep_time`, `flag_constraint_conflict` | Validates budget + macros + equipment + prep time. Emits concrete delta-instructions on rejection. |
+| **Verifier**  | 0.0  | in-loop   | `audit_menu_plan`                                                | Deterministic ingredient audit against the tool's known restriction categories.       |
+| **Saboteur**  | 0.7  | in-loop   | `approve_plan`                                                   | Red-team adversary; hunts loopholes the Verifier's tool can't see. Gates approval.    |
+| **Chef**      | 0.2  | post-loop | *(none)*                                                         | Writes step-by-step cooking instructions for the approved menu, in its own runner.    |
 
 **Shared state** flows through `session.state`. Each agent declares an
 `output_key`; the next agent reads it via `{placeholder}` substitution in its
-instruction. No direct agent-to-agent coupling.
+instruction. The Chef runs against a fresh session whose only seed is the
+approved `grounded_plan` — there is no path by which Chef output can mutate
+loop state.
 
 **Three self-correction sub-loops:**
 
-- **Budget Correction** — if the Critic rejects, it writes `delta_instructions`
-  to state. The Architect reads them next iteration and re-plans.
-- **Hallucination Prevention** — the Verifier's `audit_menu_plan` checks every
-  ingredient against the user's dietary restrictions. Any unsafe ingredient
-  forces a re-plan.
-- **Adversarial Consensus** *(new in v2)* — the Saboteur reads the Verifier's
-  verdict and tries to attack it. If it finds a credible loophole the tool
-  missed, it writes a `SaboteurReport` to state; the Architect applies the
+- **Budget / Operational Correction** — if the Critic rejects (over budget,
+  missing equipment, prep over ceiling, macros below floor), it writes
+  `delta_instructions` to state. The Architect reads them next iteration and
+  re-plans.
+- **Hallucination Prevention** — the Verifier's `audit_menu_plan` checks
+  every ingredient against the user's dietary restrictions. Any unsafe
+  ingredient forces a re-plan.
+- **Adversarial Consensus** — the Saboteur reads the Verifier's verdict and
+  tries to attack it. If it finds a credible loophole the tool missed, it
+  writes a `SaboteurReport` to state; the Architect applies the
   `proposed_fix` on the next iteration.
 
 **Three termination paths:**
 
 1. **Normal success** — Saboteur calls `approve_plan`, which sets
    `escalate=True` and breaks the `LoopAgent`. Requires the Critic approved,
-   the Verifier's audit is clean, AND the Saboteur found no loophole.
+   the Verifier's audit is clean, AND the Saboteur found no loophole. Once
+   the loop exits, `main.py` runs the Chef and (if configured) image gen.
 2. **Infeasible request** — either the preflight check raises
    `ConstraintConflictError` before any LLM call (cheap), or the Critic calls
-   `flag_constraint_conflict` mid-loop.
+   `flag_constraint_conflict` mid-loop. Chef does not run on this path.
 3. **Iteration budget exhausted** — `main.py` raises `RuntimeError` after 5
-   unsuccessful iterations.
+   unsuccessful iterations. Chef does not run on this path either.
 
 ---
 
-## What v2 adds: Adversarial Consensus
+## What v3 adds
 
-v1's safety story had a single point of failure: the Verifier ran a
-deterministic audit against a finite list of restriction categories
-(`_RESTRICTION_BLOCKS` in `tools.py`). Anything outside that list — hidden
-gluten in commercially processed oats, sesame in tahini, honey in a "vegan"
-dish, animal-based fining agents in a dijon vinaigrette — slipped through.
-Worse, the Verifier's own approve call was the only gate, so the same
-single source of truth both audited and greenlit the plan.
+v2 shipped a safe menu. v3 ships a *cookable* menu. Four pieces, in order
+of how they wire into the loop:
 
-v2 splits those two responsibilities:
+### 1. Operational constraints (equipment, prep time, macros)
 
-- The **Verifier** keeps doing exactly what it did in v1: call
-  `audit_menu_plan`, mirror the result into state. It has NO authority to
-  approve anymore. Its job is strictly deterministic audit within the tool's
-  known categories.
-- The new **Saboteur** reads the Verifier's verdict and tries to break it.
-  Its prompt lists the gaps the tool cannot see:
-  1. Cross-contamination during commercial processing (rolled oats on wheat
-     lines; soy sauce containing wheat; malt vinegar from barley).
-  2. Hidden allergens outside the tool's known categories (sesame in tahini;
-     mustard in dressings; sulfites in dried fruit).
-  3. Animal-derived ingredients that slip past naive vegan checks (honey;
-     isinglass fining in wine; anchovies in Worcestershire).
-  4. Implicit mitigations already noted by the Architect — if the plan
-     already addresses a risk in its `notes` field, the Saboteur accepts it.
+The Critic is no longer just a budget watchdog. Three new tools turn it into
+a full operational gate:
 
-Consensus means both must clear: *rule-based* safety (fast, deterministic,
-limited coverage) AND *LLM-based* safety (slower, probabilistic, broader
-coverage). Either one alone has a well-known failure mode; together they're
-defense in depth.
+- **`check_equipment(plan_json, available_equipment)`** — every recipe in
+  the plan declares a `required_equipment` list. The tool computes
+  `set(required) - set(available)` per recipe and rejects if anything is
+  missing. Catches the failure mode where the Architect happily writes
+  "blend until smooth" for a guest who explicitly said they only have a
+  stovetop and a sheet pan.
+- **`validate_prep_time(plan_json, max_prep_minutes)`** — sums each recipe's
+  `prep_minutes` and rejects if the total exceeds the user's wall-clock
+  ceiling. Single-cook assumption, no parallelism credit. Catches the
+  failure mode where every individual dish looks fast but the four-course
+  sum is three hours.
+- **`validate_nutrition_macros(plan_json, guests, calorie_floor_per_guest, protein_floor_per_guest_g)`** —
+  aggregates calories and protein across all recipes, divides by guest
+  count, and rejects if either floor is unmet. Catches the failure mode
+  where a "healthy" salad-heavy menu would leave four hungry adults under
+  500 kcal and 25 g protein each.
 
-The concept is **Multi-Agent Debate** — two independent auditors with
-different priors, both voting, and agreement required for the high-stakes
-decision. Scenarios 1 and 4 below both exercise this loop directly.
+Each tool returns a structured pass/fail with concrete delta hints. The
+Critic prompt runs them in fixed order (budget → macros → equipment → prep
+time), aggregates every violation into one `Critique`, and emits one
+delta-instruction list. The Architect re-plans with the deltas in hand.
+
+These constraints are all **opt-in via the EventConstraints model**. Leave
+`kitchen_equipment` empty and `max_prep_minutes` / the macro floors `None`,
+and the Critic skips those tools entirely — v2 behaviour is preserved
+exactly.
+
+### 2. Cooking instructions (Chef agent, outside the loop)
+
+After the safety loop approves, `main.py` constructs a brand-new
+`InMemoryRunner` for a single agent — the Chef — with a fresh session
+containing only the approved `grounded_plan`. The Chef writes a
+`CookingScript`: per-recipe atomic imperative steps with temperatures,
+timing, and ingredient quantities pulled from the plan.
+
+The Chef runs in its own runner **on purpose**. The deliberate property:
+no Chef output — malformed JSON, missing recipes, hallucinated steps,
+nothing — can retroactively invalidate or modify a menu the safety loop
+already approved. The booklet either gets cooking instructions, or it
+doesn't (and prints the menu without them); it cannot become unsafe because
+the Chef misbehaved. If the Chef call raises, `main.py` catches the
+exception, prints `chef → ERROR · …`, and renders the menu without steps.
+
+`--no-chef` skips the stage entirely.
+
+### 3. Real grocery pricing (Spoonacular adapter, optional)
+
+The Executor's tool, `price_menu_plan`, is now a dispatcher:
+
+- `AGEP_GROCERY=simulated` *(default)* routes to the bundled in-process
+  database from v1/v2. Zero dependencies, deterministic, free.
+- `AGEP_GROCERY=spoonacular` routes to `tools_spoonacular.py`, which calls
+  the Spoonacular Food API over HTTPS. Requires `SPOONACULAR_API_KEY` and
+  the `requests` package. The free tier is 150 requests/day.
+
+Both backends honour the same return contract — `grounded_plan`,
+`unknown_ingredients`, `source` — so no agent prompt changes when you flip
+the env var. The Spoonacular adapter caches name→ID lookups and per-line
+price results in process, so a session with repeated ingredients (olive oil
+appearing in four recipes) costs one search and one price call rather than
+eight. Failures on a single ingredient mark it `unknown` and let the loop
+continue, mirroring the simulated backend's tolerance.
+
+### 4. Dish images (Gemini image gen, optional)
+
+When `GOOGLE_API_KEY` is set and `google-genai` is installed,
+`images.generate_dish_images` runs once after the Chef stage, asks Gemini
+(default `gemini-2.5-flash-image-preview`, override with
+`AGEP_IMAGE_MODEL`) for one PNG per recipe, and writes them to
+`generated/<scenario>/`. The booklet then prints `Image: <path>` next to
+each dish.
+
+If the key is missing or the package isn't installed, the function returns
+`{"status": "skipped", "reason": "..."}` and AGEP prints the booklet
+without images. There is no crash path — image gen is a pure garnish.
+
+`--no-images` skips the stage even when configured.
 
 ---
 
 ## Live demo
 
-The four scenarios below are built in. All logs are actual output captured
-against the Claude Code backend with the default `sonnet` model.
+The six built-in scenarios below exercise the full v3 surface. The first
+four are unchanged from v2 and their captured logs are preserved verbatim;
+the last two are new and exercise the v3 Critic tools.
 
 ### Scenario 1 — Happy path (Saboteur catches wine-fined dijon)
 
@@ -344,15 +428,15 @@ $ python main.py --scenario impossible
  20 guests · $10 budget · required: — · restrictions: —
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-❌ ConstraintConflictError: Budget of $10.00 for 20 guests = $0.50/guest, below the floor of $8.00/guest. Constraints are mathematically infeasible.
+ConstraintConflictError: Budget of $10.00 for 20 guests = $0.50/guest, below the floor of $8.00/guest. Constraints are mathematically infeasible.
 ```
 
 **What to notice:**
 - Zero LLM calls. Zero tokens spent. The preflight catches the impossibility
   before the `LoopAgent` is even constructed. The Critic has a mirror tool
   (`flag_constraint_conflict`) for cases that only become
-  obviously-impossible mid-loop. The Saboteur never runs on this path — it
-  only fires if the five-agent loop is entered.
+  obviously-impossible mid-loop. Neither the Saboteur nor the Chef ever
+  runs on this path — both are gated behind a successful loop exit.
 
 ---
 
@@ -480,6 +564,91 @@ MENU
 
 ---
 
+### Scenario 5 — Weeknight (equipment + prep-time floor) *(new in v3)*
+
+> 4 guests · $80 · **chicken breast** required · equipment = stovetop +
+> sheet pan + mixing bowl · max prep 45 min
+
+Demonstrates: the new `check_equipment` and `validate_prep_time` Critic
+tools running in order; Architect respecting both constraints in a single
+iteration.
+
+```
+$ python main.py --scenario weeknight --no-images
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ AGEP · scenario 'weeknight' · backend claude-code
+ 4 guests · $80 budget · required: chicken breast · restrictions: —
+ equipment: stovetop, sheet pan, mixing bowl · max prep: 45 min
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Iteration 1
+  architect  → drafted 3 recipes
+  executor   → price_menu_plan(3 recipes, 19 ingredients)
+  executor   ← $24.72 total · 0 unknown · source=simulated
+  executor   → returned priced plan ($24.72)
+  critic     → check_equipment(available=[stovetop, sheet pan, mixing bowl])
+  critic     ← APPROVED · all equipment available
+  critic     → validate_prep_time(max=45 min)
+  critic     ← APPROVED · 45 min total prep
+  critic     → APPROVED · "all checks passed"
+  verifier   → audit_menu_plan(19 ingredients, [])
+  verifier   ← APPROVED · 19 ingredients checked · 0 violations
+  verifier   → APPROVED · 0 violations
+  saboteur   → approve_plan — loop exits
+  saboteur   ← approved=True
+  saboteur   → CLEAR · "Audited all 19 ingredients across the threat model: no gluten-containing items, no hidden…"
+
+Chef
+  chef       → wrote instructions for 3 recipes
+
+────────────────────────────────────────────────────────────
+ Plan approved in 1 iteration · $24.72 · 45 min prep
+────────────────────────────────────────────────────────────
+```
+
+**What to notice:**
+- The Critic trace now shows the new tools firing in fixed order:
+  `check_equipment` first (clears — every recipe's `required_equipment` is
+  a subset of `[stovetop, sheet pan, mixing bowl]`), then
+  `validate_prep_time` (clears — sum of `prep_minutes` is exactly 45,
+  hitting the ceiling without exceeding it). Budget is checked inline
+  against the grounded plan total without a tool call.
+- The Architect respected both constraints on the first try — no
+  oven-roasted dishes, no blender purées, no slow-braised anything. This
+  is the prompt addition doing its job: the Architect now reads
+  `kitchen_equipment` and `max_prep_minutes` from `user_constraints` and
+  treats them as hard targets, not aspirational.
+- The **Chef** stage runs after the loop and writes per-recipe step lists
+  for all three dishes. It runs in its own runner; the loop has already
+  exited by the time Chef takes its first turn.
+- The resulting menu is a 45-minute weeknight dinner: **Pan-Seared Lemon
+  Garlic Chicken Breast** on the stovetop, **Garlic Sautéed Green Beans**
+  alongside, and **Herb White Rice** as the starch — three dishes, no
+  oven, well under budget at $24.72 for four guests.
+
+---
+
+### Scenario 6 — Macro Floor (calorie + protein floors) *(new in v3)*
+
+> 4 guests · $120 · **salmon** required · nut-allergy · calorie floor
+> 700 kcal/guest · protein floor 40 g/guest
+
+Demonstrates: the `validate_nutrition_macros` Critic tool. Run it yourself
+to see the macro tool fire — this scenario was not captured for the README,
+so there's no canned trace to paste.
+
+What the run will show: the Critic adds a fourth tool call to its sequence
+(`validate_nutrition_macros(guests=4, kcal_floor=700, protein_floor=40g)`)
+and aggregates per-guest calories and protein from `_NUTRITION_DB` across
+every recipe. If the Architect's first draft is salad-and-rice-heavy, the
+tool will reject with a delta hint along the lines of "increase
+protein-dense portions" and the Architect re-plans on the next iteration —
+typically by upping the salmon weight or adding a legume side. The
+nut-allergy restriction stays enforced through the Verifier in parallel.
+
+---
+
 ## Quickstart
 
 ### Default — Claude Code (no API key)
@@ -489,7 +658,7 @@ git clone https://github.com/IrfanThomson/agep.git
 cd agep
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python main.py --scenario hidden_gluten
+python main.py --scenario weeknight
 ```
 
 The `claude-agent-sdk` package ships a bundled Claude Code CLI and reuses
@@ -510,20 +679,53 @@ export GOOGLE_API_KEY=...
 python main.py --scenario hidden_gluten --backend gemini
 ```
 
+### Optional integrations *(new in v3)*
+
+Both are no-op when not configured — AGEP's default zero-config path
+doesn't pay for them.
+
+**Live grocery pricing via Spoonacular** (free tier: 150 requests/day):
+
+```bash
+pip install requests
+export AGEP_GROCERY=spoonacular
+export SPOONACULAR_API_KEY=...
+python main.py --scenario weeknight
+```
+
+The Executor's tool dispatches to the HTTP backend; per-name and per-line
+results are cached in process so repeated ingredients across recipes cost
+one search and one price lookup, not N.
+
+**Dish image generation via Gemini**:
+
+```bash
+pip install google-genai
+export GOOGLE_API_KEY=...
+python main.py --scenario weeknight
+# PNGs land in generated/weeknight/<dish-slug>.png
+```
+
+If `GOOGLE_API_KEY` is unset or `google-genai` isn't installed, image gen
+prints `[images] skipped: <reason>` and the booklet renders without
+images. Override the model with `AGEP_IMAGE_MODEL=...`.
+
 ### CLI reference
 
 ```
-usage: agep [-h] [--scenario {budget_crunch,happy,hidden_gluten,impossible}]
+usage: agep [-h] [--scenario {budget_crunch,happy,hidden_gluten,impossible,macro_floor,weeknight}]
             [--backend {claude-code,anthropic,gemini}]
-            [--model MODEL] [--verbose]
+            [--model MODEL] [--no-chef] [--no-images] [--verbose]
 ```
 
-| Flag         | Default       | Purpose                                                          |
-|--------------|---------------|------------------------------------------------------------------|
-| `--scenario` | `happy`       | Built-in scenario selector.                                      |
-| `--backend`  | `claude-code` | Overrides `AGEP_LLM`.                                            |
-| `--model`    | backend-specific | Overrides `AGEP_MODEL`. `sonnet`, `opus`, `gemini-2.5-pro`, … |
-| `--verbose`  | off           | DEBUG logs from ADK and the adapter.                             |
+| Flag           | Default          | Purpose                                                       |
+|----------------|------------------|---------------------------------------------------------------|
+| `--scenario`   | `happy`          | Built-in scenario selector.                                   |
+| `--backend`    | `claude-code`    | Overrides `AGEP_LLM`.                                         |
+| `--model`      | backend-specific | Overrides `AGEP_MODEL`. `sonnet`, `opus`, `gemini-2.5-pro`, … |
+| `--no-chef`    | off              | Skip the post-loop Chef stage entirely.                       |
+| `--no-images`  | off              | Skip the post-loop image-generation stage entirely.           |
+| `--verbose`    | off              | DEBUG logs from ADK and the adapter.                          |
 
 Set `AGEP_DEBUG=1` to stream the Claude Code subprocess stderr to your
 terminal — useful when debugging the adapter itself.
@@ -534,18 +736,25 @@ terminal — useful when debugging the adapter itself.
 
 ```
 agep/
-├── README.md          # You are here
+├── README.md             # You are here
 ├── requirements.txt
-├── .env.example       # Backend selector + optional API keys
-├── state.py           # Pydantic models: EventConstraints, MenuPlan, Critique, SafetyAudit, SaboteurReport
-├── tools.py           # Simulated grocery/nutrition DBs + escalation hooks
-├── llm.py             # Pluggable backend selector + ClaudeCodeLlm BaseLlm adapter
-├── agents.py          # 5 LlmAgents + the LoopAgent(max_iterations=5)
-└── main.py            # CLI + preflight + Runner + human-readable event formatter
+├── .env.example          # Backend selector + grocery selector + optional API keys
+├── state.py              # Pydantic models: EventConstraints, MenuPlan, Critique,
+│                         # SafetyAudit, SaboteurReport, RecipeInstructions, CookingScript
+├── tools.py              # Simulated grocery/nutrition DBs, validation tools,
+│                         # AGEP_GROCERY dispatcher, escalation hooks
+├── tools_spoonacular.py  # Optional Spoonacular HTTP adapter (lazy-imported)
+├── images.py             # Optional Gemini dish-image generator (lazy-imported)
+├── llm.py                # Pluggable backend selector + ClaudeCodeLlm BaseLlm adapter
+├── agents.py             # 5 in-loop LlmAgents + LoopAgent(max_iterations=5) + Chef
+└── main.py               # CLI + preflight + safety-loop runner + Chef runner +
+                          # image-gen orchestration + booklet formatter
 ```
 
-Five files, ~1950 lines, no magic. Each file's top-of-module docstring
-explains its scope.
+Six files plus two optional adapters, no magic. Each file's top-of-module
+docstring explains its scope. The two optional adapters
+(`tools_spoonacular.py`, `images.py`) are imported lazily, so the default
+zero-config path doesn't load `requests` or `google-genai`.
 
 ---
 
@@ -581,9 +790,11 @@ Three details worth highlighting:
 
 ## Extending
 
-**Swap in a real grocery API** — replace `price_menu_plan` in `tools.py` with
-a call to Kroger / Instacart / USDA. Agent code doesn't change; that's the
-point of the tool abstraction.
+**Swap in a different grocery API** — `tools.price_menu_plan` is a
+dispatcher keyed off `AGEP_GROCERY`. Add a new branch (e.g. `kroger`,
+`instacart`) and a sibling adapter file that mirrors the
+`{grounded_plan, unknown_ingredients, source}` contract; no agent prompt
+needs to change.
 
 **Add dietary restrictions** — edit `_RESTRICTION_BLOCKS`,
 `_GLOBAL_EXCLUSIONS`, and `_PER_GUEST_PREFERENCES` in `tools.py`. The
@@ -594,13 +805,35 @@ Saboteur will often catch gaps in these lists before you even notice them.
 mercury in large predatory fish") gives the Saboteur a new dimension to
 audit without changing any other agent's code.
 
-**Persist sessions** — swap `InMemoryRunner` for a persistent `SessionService`
-(e.g. `VertexAiSessionService`).
+**Add a new in-loop validator** — write a function in `tools.py` that
+returns `{"status": "approved|rejected", "violations": [...]}`, attach it
+to the Critic's `tools=[...]` list in `agents.py::build_agents`, and add a
+matching step to `CRITIC_PROMPT`. The new validator runs alongside macros,
+equipment, and prep time without touching any other agent.
 
-**Add pytest** — the four scenarios are dispatch-ready for pytest; assert on
+**Swap Gemini for OpenAI image generation** — `images.generate_dish_images`
+is the only call site. Replace the `genai` import and the
+`client.models.generate_content` block with the OpenAI Images SDK; preserve
+the return shape (`status`, `images`, `model`) and the rest of the booklet
+keeps working unchanged.
+
+**Make the Chef call back into the Verifier** — if the Chef's instructions
+introduce a new ingredient or an implicit serving size, you can wire the
+post-loop runner to feed Chef output through a second audit pass. Today
+the Chef only emits steps and quantities are fixed by the approved plan,
+but the runner is wired to make this trivial.
+
+**Persist sessions** — swap `InMemoryRunner` for a persistent
+`SessionService` (e.g. `VertexAiSessionService`). Both runners (loop +
+Chef) accept the swap independently.
+
+**Add pytest** — the six scenarios are dispatch-ready for pytest; assert on
 `plan_approved=True`, `total_cost_usd <= budget`, and that
 `ConstraintConflictError` fires for `impossible`. For `hidden_gluten`,
 assert the final plan's `notes` contains a certified-GF sourcing caveat.
+For `weeknight`, assert `sum(r.prep_minutes) <= 45` and that no recipe's
+`required_equipment` includes anything outside the available set. For
+`macro_floor`, assert per-guest calories ≥ 700 and protein ≥ 40 g.
 
 ---
 
@@ -611,3 +844,6 @@ assert the final plan's `notes` contains a certified-GF sourcing caveat.
   - Claude Code installed and authenticated locally (default), OR
   - `ANTHROPIC_API_KEY` + `google-adk[extensions]`, OR
   - `GOOGLE_API_KEY`
+- Optional v3 extras (no-op when absent):
+  - `requests` + `SPOONACULAR_API_KEY` for live grocery pricing
+  - `google-genai` + `GOOGLE_API_KEY` for dish-image generation

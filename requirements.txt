@@ -2,3 +2,12 @@ google-adk>=1.31.0
 pydantic>=2.6
 python-dotenv>=1.0
 claude-agent-sdk>=0.1.0
+
+# Optional v3 extras — install only if you intend to use them. Both are
+# imported lazily so the default zero-config path does not need them.
+#
+# Spoonacular live grocery pricing (AGEP_GROCERY=spoonacular):
+# requests>=2.31
+#
+# Dish image generation (GOOGLE_API_KEY set):
+# google-genai>=0.3.0
