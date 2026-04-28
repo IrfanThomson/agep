@@ -80,6 +80,155 @@ Shared state flows through `session.state`. Each agent declares an `output_key`;
 
 </details>
 
+<details>
+<summary><b>Step-by-step walkthrough of one iteration (happy scenario)</b></summary>
+
+A trace through one full run of `--scenario happy` (the README's `happy` example): 6 guests, $200 budget, Salmon + Quinoa required, vegan + nut-allergy. Approves on iteration 1.
+
+**Step 0 — User invokes the CLI.** `main.py` looks up the scenario and calls `run_scenario`:
+
+```python
+# main.py
+"happy": EventConstraints(
+    guests=6,
+    budget_usd=200.0,
+    required_ingredients=["Salmon", "Quinoa"],
+    dietary_restrictions=["vegan", "nut-allergy"],
+),
+
+constraints = SCENARIOS[args.scenario]
+final_state = asyncio.run(run_scenario(constraints))
+```
+
+`run_scenario` seeds `session.state["user_constraints"]` and runs the `LoopAgent`.
+
+**Step 1 — Loop boots.** `LoopAgent` runs its `sub_agents` in order, then loops — until any sub-agent escalates.
+
+```python
+# agents.py
+def build_loop() -> LoopAgent:
+    architect, executor, critic, verifier, saboteur = build_agents()
+    return LoopAgent(
+        name="AGEP_Loop",
+        sub_agents=[architect, executor, critic, verifier, saboteur],
+        max_iterations=MAX_ITERATIONS,  # 5
+    )
+```
+
+**Step 2 — Architect drafts a plan.** No tools. Substitutes `{user_constraints}` into its prompt — `{critique}`, `{verification}`, `{saboteur_report}` are empty on iteration 1. Reads `user_constraints`, writes `current_plan`.
+
+```jsonc
+// session.state["current_plan"]  (abridged)
+{
+  "recipes": [
+    {"recipe_name": "Herb-Baked Salmon...",        "accommodates": ["nut-allergy"],         "prep_minutes": 35},
+    {"recipe_name": "Quinoa Tabbouleh",            "accommodates": ["vegan", "nut-allergy"]},
+    {"recipe_name": "Roasted Vegetables",          "accommodates": ["vegan", "nut-allergy"]},
+    {"recipe_name": "Warm Cumin Chickpeas...",     "accommodates": ["vegan", "nut-allergy"]}
+  ],
+  "total_cost_usd": null,           // not yet priced
+  "prep_minutes": 115
+}
+```
+
+Salmon covers omnivores; the other three cover vegan guests. All four are nut-free.
+
+**Step 3 — Executor grounds prices.** Hands the plan to one tool and returns its output verbatim.
+
+```python
+# tools.py
+def price_menu_plan(plan_json: str) -> dict[str, Any]:
+    """Price every ingredient in a menu plan in a single call.
+    Returns: {"grounded_plan": ..., "unknown_ingredients": [...], "source": ...}"""
+```
+
+Reads `current_plan`, `user_constraints`. Writes `grounded_plan` (now with `total_cost_usd: 86.69`, every ingredient carrying `estimated_cost_usd`).
+
+**Step 4 — Critic validates.** Temp 0.0; calls each constraint tool deterministically.
+
+```python
+# tools.py — Critic's tools
+def validate_nutrition_macros(plan_json, guests, calorie_floor_per_guest=0, protein_floor_per_guest_g=0): ...
+def check_equipment(plan_json, available_equipment): ...
+def validate_prep_time(plan_json, max_prep_minutes=0): ...
+def flag_constraint_conflict(reason, tool_context):  # abort path
+    """Abort the loop — constraints are mathematically impossible."""
+```
+
+For `happy`: $86.69 ≤ $200, no equipment / prep / macro caps set → all four tools return approved.
+
+```jsonc
+// session.state["critique"]
+{"status": "approved", "reason": "all checks passed", "delta_instructions": []}
+```
+
+(For contrast, the `budget_crunch` run produces `{"status": "rejected", "reason": "Total cost of $64.84 exceeds the $60.00 budget by $4.84.", "delta_instructions": [...5 items...]}` — those `delta_instructions` flow back into the Architect's `{critique}` placeholder on the next iteration.)
+
+**Step 5 — Verifier does the dietary audit.** Single tool call.
+
+```python
+# tools.py
+def audit_menu_plan(plan_json: str, restrictions: list[str]) -> dict[str, Any]:
+    """Global exclusions (allergies, every dish) vs per-guest preferences
+    (vegan/vegetarian, at least one dish)."""
+```
+
+`nut-allergy` is global (every dish must comply); `vegan` only requires *at least one* dish to qualify. Both are satisfied.
+
+```jsonc
+// session.state["verification"]
+{"status": "approved", "violations": []}
+```
+
+**Step 6 — Saboteur red-teams (decides whether to terminate).** The only agent with `approve_plan`:
+
+```python
+# tools.py
+def approve_plan(tool_context: ToolContext) -> dict[str, Any]:
+    """Approve the current plan and terminate the loop.
+    Sets state["plan_approved"]=True and actions.escalate=True."""
+```
+
+Reads `grounded_plan`, `verification`, `critique`, `user_constraints`. For `happy`, no realistic attack exists, so it calls `approve_plan` and emits:
+
+```jsonc
+// session.state["saboteur_report"]
+{"status": "no_loophole_found",
+ "notes": "Audited all 34 ingredients across 4 recipes against the full threat model..."}
+```
+
+`actions.escalate=True` causes `LoopAgent` to break out instead of looping.
+
+> Counter-example from `hidden_gluten` iteration 1: `{"status": "loophole_found", "attack": "The Avocado and Mixed Greens Salad calls for 'vinegar' with no type specified; malt vinegar is derived from barley...", "proposed_fix": "..."}`. No `approve_plan` call → loop continues → Architect re-drafts using `{saboteur_report}` as feedback.
+
+**Step 7 — Loop exits, control returns to `main.py`.** A *fresh* `InMemoryRunner` is created for the Chef so it can't retroactively modify the approved plan.
+
+```python
+# main.py
+grounded_plan = final_state.get("grounded_plan") or final_state.get("current_plan")
+
+if not args.no_chef:
+    chef_payload = asyncio.run(run_chef(grounded_plan))
+    cooking_script = _normalize_cooking_script(chef_payload)
+```
+
+**Step 8 — Chef writes cooking instructions.** No tools, temp 0.2. The plan is locked; the Chef only adds steps.
+
+```jsonc
+// session.state["cooking_script"]
+{"recipes": [
+  {"recipe_name": "Herb-Baked Salmon with Lemon",
+   "steps": ["Preheat oven to 400 F.", "Mince 4 garlic cloves.", ...11 steps...]},
+  ...
+]}
+```
+
+**Step 9 — Plain-function epilogue.** `generate_dish_images()` (not an agent — a direct API call) and `_print_receipt()`.
+
+If iteration 1 approves: 5 LLM calls + ~7 tool calls before the Chef runs. If the Saboteur finds a loophole, iteration 2 starts with `{saboteur_report}` populated in the Architect's prompt — the only way feedback re-enters the system.
+
+</details>
+
 After the loop terminates with an approved plan, control passes to a second, independent runner:
 
 ```mermaid
